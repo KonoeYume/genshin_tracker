@@ -1,4 +1,4 @@
-"""Read-only Genshin shopping-list web page for genshin_v2.db.
+"""SQLite-backed Genshin goal, inventory, and catalog web app.
 
 Run: python -m uvicorn app_v2:app --reload
 Requires shopping_list.py and its calculator modules in the same folder.
@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from shopping_list import build
+from catalog_admin import FAMILY_TIERS, create_character, create_weapon
 
 DB_PATH = Path(__file__).resolve().parent / 'genshin_v2.db'
 app = FastAPI(title='Genshin Tracker')
@@ -48,7 +49,86 @@ class MaterialFamilyUpdate(BaseModel):
     material_names: list[str]
 
 
-FAMILY_TIERS = {'common_drop': (1, 2, 3), 'elite_drop': (2, 3, 4)}
+class NewCharacter(BaseModel):
+    name: str
+    element: str
+    boss_material: str
+    common_drop_family: str
+    local_specialty: str
+    talent_book_family: str
+    weekly_boss_type: str
+
+
+class NewWeapon(BaseModel):
+    name: str
+    weapon_type: str
+    rarity: int = Field(ge=1, le=5)
+    ascension_family: str
+    common_drop_family: str
+    elite_drop_family: str
+
+
+@app.get('/api/catalog/options')
+def catalog_options():
+    fields = {
+        'common_families': ('characters','common_drop_family'),
+        'talent_families': ('characters','talent_book_family'),
+        'ascension_families': ('weapons','ascension_family'),
+        'elite_families': ('weapons','elite_drop_family'),
+    }
+    with sqlite3.connect(DB_PATH) as db:
+        result = {key:[r[0] for r in db.execute(
+            f'SELECT DISTINCT {column} FROM {table} WHERE {column} IS NOT NULL ORDER BY {column}')]
+            for key,(table,column) in fields.items()}
+        result['element_gems'] = dict(db.execute(
+            'SELECT element,gem_family FROM element_gems ORDER BY element'))
+        result['weapon_types'] = ['Sword','Claymore','Polearm','Catalyst','Bow']
+        common = (set(result['common_families']) |
+            {r[0] for r in db.execute('''SELECT DISTINCT common_drop_family FROM weapons
+                WHERE common_drop_family IS NOT NULL''')})
+        weekly = {r[0] for r in db.execute('''SELECT DISTINCT weekly_boss_material
+            FROM characters WHERE weekly_boss_material IS NOT NULL''')}
+        weekly.update(r[0] for r in db.execute('''SELECT family FROM material_family_tiers
+            WHERE material_role='weekly_boss_drop' '''))
+        order = {(role,name):position for role,name,position in db.execute(
+            'SELECT material_role,type_name,sort_order FROM material_type_order')}
+        def workbook_order(role, values):
+            return sorted(values,key=lambda name:(order.get((role,name),100000),name))
+        result['common_families'] = workbook_order('common_drop', common)
+        result['elite_families'] = workbook_order('elite_drop', result['elite_families'])
+        result['talent_families'] = workbook_order('talent_book', result['talent_families'])
+        result['ascension_families'] = workbook_order('weapon_ascension', result['ascension_families'])
+        result['weekly_boss_types'] = workbook_order('weekly_boss_drop', weekly)
+        return result
+
+
+@app.post('/api/catalog/characters', status_code=201)
+def add_character(new: NewCharacter):
+    try:
+        with sqlite3.connect(DB_PATH) as db:
+            db.execute('PRAGMA foreign_keys=ON')
+            db.execute('BEGIN IMMEDIATE')
+            cid, missing = create_character(db, new.model_dump())
+    except sqlite3.IntegrityError as error:
+        raise HTTPException(status_code=409, detail='Character name already exists') from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {'id':cid,'name':new.name.strip(),'missing_families':missing}
+
+
+@app.post('/api/catalog/weapons', status_code=201)
+def add_weapon(new: NewWeapon):
+    try:
+        with sqlite3.connect(DB_PATH) as db:
+            db.execute('PRAGMA foreign_keys=ON')
+            db.execute('BEGIN IMMEDIATE')
+            wid, copy_id, missing = create_weapon(db, new.model_dump())
+    except sqlite3.IntegrityError as error:
+        raise HTTPException(status_code=409, detail='Weapon name already exists') from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {'id':wid,'copy_id':copy_id,'name':new.name.strip(),
+            'missing_families':missing}
 
 
 def shopping_data(db_path=DB_PATH):
@@ -277,7 +357,7 @@ def missing_families():
 def save_material_family(update: MaterialFamilyUpdate):
     tiers=FAMILY_TIERS.get(update.material_role)
     if tiers is None:
-        raise HTTPException(status_code=422,detail='Unsupported family role')
+        raise HTTPException(status_code=422,detail='Unsupported material type')
     names=[name.strip() for name in update.material_names]
     if (not update.family.strip() or len(names)!=len(tiers) or
         any(not name for name in names) or len(set(names))!=len(names)):
@@ -289,7 +369,7 @@ def save_material_family(update: MaterialFamilyUpdate):
             WHERE material_role=? AND missing_family=?''',
             (update.material_role,update.family)).fetchall()
         if not issues:
-            raise HTTPException(status_code=404,detail='Missing family not found')
+            raise HTTPException(status_code=404,detail='Missing material type not found')
         db.execute('''CREATE TABLE IF NOT EXISTS material_family_tiers (
             material_role TEXT NOT NULL, family TEXT NOT NULL, tier INTEGER NOT NULL,
             material_id INTEGER NOT NULL REFERENCES materials(id),
@@ -337,6 +417,16 @@ def home():
   label { display: inline-block; margin: 8px 12px 8px 0; } select { padding: 6px; }
   .goal-row { margin: 8px 0; } .goal-row label { margin: 0; }
   .goal-group { margin: 18px 0; }
+  .catalog-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 4px 16px; }
+  .catalog-fields label { display: block; }
+  .catalog-fields input, .catalog-fields select, .catalog-fields .read-only-field {
+    display: block; box-sizing: border-box; width: 100%; height: 34px;
+    padding: 6px; font: 13.333px Arial, sans-serif;
+  }
+  .catalog-fields [hidden] { display: none; }
+  .catalog-value { margin: 8px 12px 8px 0; }
+  .catalog-fields .read-only-field { display: flex; align-items: center;
+    border: 1px solid #ccc; border-radius: 2px; background: #f8fafc; }
   details { margin: 20px 0; } li { margin: 6px 0; overflow-wrap: anywhere; }
   @media (max-width: 600px) { body { margin: 12px auto; } th,td { padding: 7px 4px; font-size: 13px; } }
 </style></head><body>
@@ -367,10 +457,10 @@ def home():
   <div class="goal-row"><label>Target Ascension: <input id="weapon-ascension" type="number" min="0" max="6" step="1"></label></div>
 </div>
 <button id="save-weapon">Save Weapon Goal</button> <span id="weapon-message" role="status"></span>
-<h3>Add another copy</h3>
+<h3>Add Another Copy</h3>
 <label>Weapon <select id="weapon-catalog"></select></label>
-<label>Label (optional) <input id="copy-label" type="text" maxlength="80" placeholder="e.g. second copy"></label>
-<button id="add-weapon-copy">Add copy</button> <span id="add-copy-message" role="status"></span>
+<label>Label (Optional) <input id="copy-label" type="text" maxlength="80" placeholder="e.g. second copy"></label>
+<button id="add-weapon-copy">Add Copy</button> <span id="add-copy-message" role="status"></span>
 </section>
 <section class="summary"><h2>Traveller Goal</h2>
 <label>Element <select id="traveller-element"></select></label>
@@ -386,21 +476,54 @@ def home():
 <button id="save-traveller">Save Traveller Goal</button> <span id="traveller-message" role="status"></span>
 <p class="note">Traveller level and ascension are shared across elements. Cryo talent costs are not available yet.</p>
 </section>
-<section class="summary"><h2>Missing Material Families</h2>
-<p class="note">Enter the exact material names, from lowest to highest tier. Saving links the family to every listed character and weapon.</p>
+<section class="summary"><h2>Missing Material Types</h2>
+<p class="note">Enter exact material names from lowest to highest tier. Saving links the type to every listed character and weapon.</p>
 <div id="missing-families"></div>
 <p id="family-message" role="status"></p>
 </section>
+<section class="summary"><h2>Add to Catalog</h2>
+<p class="note">New entries start at level 1, ascension 0, and talent level 1. Existing material types are reused. If a type is new, complete it in Missing Material Types after saving.</p>
+<details><summary>New Character</summary>
+<div class="catalog-fields">
+  <label>Name <input id="new-character-name" type="text"></label>
+  <label>Element <select id="new-character-element"></select></label>
+  <div class="catalog-value">Gem Type <span id="new-character-gem" class="read-only-field"></span></div>
+  <label>Boss Material Name <input id="new-character-boss" type="text"></label>
+  <label>Common Drop Type <select id="new-character-common" data-new-id="new-character-common-custom"></select>
+    <input id="new-character-common-custom" type="text" placeholder="New Common Drop Type" hidden></label>
+  <label>Local Specialty Name <input id="new-character-local" type="text"></label>
+  <label>Talent Book Type <select id="new-character-talent" data-new-id="new-character-talent-custom"></select>
+    <input id="new-character-talent-custom" type="text" placeholder="New Talent Book Type" hidden></label>
+  <label>Weekly Boss Type <select id="new-character-weekly" data-new-id="new-character-weekly-custom"></select>
+    <input id="new-character-weekly-custom" type="text" placeholder="New Weekly Boss Type" hidden></label>
+</div>
+<button id="create-character" type="button">Add Character</button> <span id="create-character-message" role="status"></span>
+</details>
+<details><summary>New Weapon</summary>
+<div class="catalog-fields">
+  <label>Name <input id="new-weapon-name" type="text"></label>
+  <label>Weapon Type <select id="new-weapon-type"></select></label>
+  <label>Rarity <input id="new-weapon-rarity" type="number" min="1" max="5" step="1"></label>
+  <label>Ascension Material Type <select id="new-weapon-ascension" data-new-id="new-weapon-ascension-custom"></select>
+    <input id="new-weapon-ascension-custom" type="text" placeholder="New Ascension Material Type" hidden></label>
+  <label>Common Drop Type <select id="new-weapon-common" data-new-id="new-weapon-common-custom"></select>
+    <input id="new-weapon-common-custom" type="text" placeholder="New Common Drop Type" hidden></label>
+  <label>Elite Drop Type <select id="new-weapon-elite" data-new-id="new-weapon-elite-custom"></select>
+    <input id="new-weapon-elite-custom" type="text" placeholder="New Elite Drop Type" hidden></label>
+</div>
+<button id="create-weapon" type="button">Add Weapon</button> <span id="create-weapon-message" role="status"></span>
+</details>
+</section>
 <section class="summary" id="summary">Loading shopping list…</section>
 <p id="save-message" role="status"></p>
-<table><thead><tr><th>Material</th><th>Required</th><th>Owned</th><th>Still needed</th><th>Update value</th><th>Action</th></tr></thead>
+<table><thead><tr><th>Material</th><th>Required</th><th>Owned</th><th>Still Needed</th><th>Update Value</th><th>Action</th></tr></thead>
 <tbody id="materials"></tbody></table>
 <details id="excluded-section"><summary id="excluded-title">Excluded goals</summary>
 <ul id="excluded"></ul></details>
 <p class="note">EXP is shown as points. Using EXP items may overshoot and increase the Mora cost.</p>
 <script>
   const number = new Intl.NumberFormat();
-  async function loadCharacters() {
+  async function loadCharacters(selectedId) {
     const response = await fetch('/api/characters');
     if (!response.ok) throw new Error('Could not load characters.');
     const characters = await response.json();
@@ -411,7 +534,8 @@ def home():
       option.value = character.id; option.textContent = character.name;
       select.append(option);
     }
-    select.addEventListener('change', loadCharacterGoal);
+    if (selectedId) select.value = String(selectedId);
+    select.onchange = loadCharacterGoal;
     if (characters.length) await loadCharacterGoal();
   }
   async function loadCharacterGoal() {
@@ -624,15 +748,17 @@ def home():
   document.getElementById('save-traveller').addEventListener('click', saveTravellerGoal);
   async function loadMissingFamilies() {
     const response = await fetch('/api/missing-families');
-    if (!response.ok) throw new Error('Could not load missing material families.');
+    if (!response.ok) throw new Error('Could not load missing material types.');
     const groups = await response.json();
     const container = document.getElementById('missing-families');
     container.replaceChildren();
-    if (!groups.length) { container.textContent = 'All material families are linked.'; return; }
+    if (!groups.length) { container.textContent = 'All material types are linked.'; return; }
     for (const group of groups) {
       const panel = document.createElement('div'); panel.className = 'goal-group';
       const title = document.createElement('h3');
-      title.textContent = `${group.family} (${group.material_role.replaceAll('_',' ')})`;
+      const roleName = group.material_role.split('_')
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+      title.textContent = `${group.family} (${roleName})`;
       panel.append(title);
       const affected = document.createElement('p');
       affected.className = 'note'; affected.textContent = 'Affects: ' + group.affected.join(', ');
@@ -640,19 +766,19 @@ def home():
       const inputs = [];
       for (const tier of group.tiers) {
         const label = document.createElement('label');
-        label.textContent = `Tier ${tier} material: `;
+        label.textContent = `Tier ${tier} Material: `;
         const input = document.createElement('input');
         input.type = 'text'; input.placeholder = 'Exact material name';
         input.setAttribute('aria-label', `${group.family} tier ${tier} material`);
         label.append(input); panel.append(label); inputs.push(input);
       }
       const button = document.createElement('button');
-      button.textContent = 'Save family';
+      button.textContent = 'Save Type';
       button.addEventListener('click', async () => {
         const message = document.getElementById('family-message');
         const material_names = inputs.map(input => input.value.trim());
         if (material_names.some(name => !name) || new Set(material_names).size !== material_names.length) {
-          message.textContent = 'Enter three distinct material names for ' + group.family + '.'; return;
+          message.textContent = `Enter ${group.tiers.length} distinct material names for ${group.family}.`; return;
         }
         button.disabled = true;
         try {
@@ -660,7 +786,7 @@ def home():
             method:'PUT', headers:{'Content-Type':'application/json'},
             body:JSON.stringify({material_role:group.material_role,family:group.family,material_names})
           });
-          if (!response.ok) throw new Error('Could not save family (HTTP '+response.status+').');
+          if (!response.ok) throw new Error('Could not save type (HTTP '+response.status+').');
           message.textContent = group.family + ' saved.';
           await loadMissingFamilies(); await load();
         } catch (error) { message.textContent = error.message; button.disabled = false; }
@@ -668,6 +794,115 @@ def home():
       panel.append(button); container.append(panel);
     }
   }
+  async function loadCatalogOptions() {
+    const response = await fetch('/api/catalog/options');
+    if (!response.ok) throw new Error('Could not load catalog suggestions.');
+    const options = await response.json();
+    const elementSelect = document.getElementById('new-character-element');
+    const previousElement = elementSelect.value;
+    elementSelect.replaceChildren();
+    const emptyElement = document.createElement('option');
+    emptyElement.value = ''; emptyElement.textContent = '';
+    elementSelect.append(emptyElement);
+    for (const element of Object.keys(options.element_gems)) {
+      const option = document.createElement('option');
+      option.value = element; option.textContent = element; elementSelect.append(option);
+    }
+    if (previousElement && options.element_gems[previousElement]) elementSelect.value = previousElement;
+    const showGem = () => {
+      document.getElementById('new-character-gem').textContent =
+        options.element_gems[elementSelect.value] || '';
+    };
+    elementSelect.onchange = showGem;
+    showGem();
+    const weaponTypeSelect = document.getElementById('new-weapon-type');
+    const previousType = weaponTypeSelect.value;
+    weaponTypeSelect.replaceChildren();
+    const emptyWeaponType = document.createElement('option');
+    emptyWeaponType.value = ''; emptyWeaponType.textContent = '';
+    weaponTypeSelect.append(emptyWeaponType);
+    for (const type of options.weapon_types) {
+      const option = document.createElement('option');
+      option.value = type; option.textContent = type; weaponTypeSelect.append(option);
+    }
+    if (options.weapon_types.includes(previousType)) weaponTypeSelect.value = previousType;
+    function fillTypeSelect(id, values) {
+      const select = document.getElementById(id);
+      const previous = select.value;
+      select.replaceChildren();
+      const blank = document.createElement('option');
+      blank.value = ''; blank.textContent = '';
+      select.append(blank);
+      for (const value of values) {
+        const option = document.createElement('option');
+        option.value = value; option.textContent = value; select.append(option);
+      }
+      const newOption = document.createElement('option');
+      newOption.value = '__new__'; newOption.textContent = 'New Type…';
+      select.append(newOption);
+      if (values.includes(previous)) select.value = previous;
+      const custom = document.getElementById(select.dataset.newId);
+      const toggle = () => { custom.hidden = select.value !== '__new__'; };
+      select.onchange = toggle; toggle();
+    }
+    fillTypeSelect('new-character-common', options.common_families);
+    fillTypeSelect('new-weapon-common', options.common_families);
+    fillTypeSelect('new-weapon-elite', options.elite_families);
+    fillTypeSelect('new-character-weekly', options.weekly_boss_types);
+    fillTypeSelect('new-character-talent', options.talent_families);
+    fillTypeSelect('new-weapon-ascension', options.ascension_families);
+  }
+  async function submitCatalog(kind, fields, messageId) {
+    const message = document.getElementById(messageId);
+    const data = {};
+    for (const [key,id] of Object.entries(fields)) {
+      const control = document.getElementById(id);
+      const value = (control.value === '__new__' && control.dataset.newId ?
+        document.getElementById(control.dataset.newId).value : control.value).trim();
+      if (!value) { message.textContent = 'Fill in every field.'; return; }
+      data[key] = key === 'rarity' ? Number(value) : value;
+    }
+    if (kind === 'weapons' && (!Number.isInteger(data.rarity) || data.rarity<1 || data.rarity>5)) {
+      message.textContent = 'Rarity must be a whole number from 1 to 5.'; return;
+    }
+    const button = document.getElementById(kind === 'characters' ? 'create-character' : 'create-weapon');
+    button.disabled = true;
+    try {
+      const response = await fetch('/api/catalog/' + kind, {
+        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(typeof error.detail === 'string' ? error.detail :
+          'Could not add entry (HTTP '+response.status+').');
+      }
+      const result = await response.json();
+      message.textContent = result.name + ' added.' + (result.missing_families.length ?
+        ' Complete its entries in Missing Material Types before its costs appear.' : '');
+      for (const id of Object.values(fields)) {
+        const control = document.getElementById(id);
+        control.value = '';
+        if (control.dataset.newId) document.getElementById(control.dataset.newId).value = '';
+      }
+      if (kind === 'characters') await loadCharacters(result.id);
+      else { await loadWeaponCatalog(); await loadWeaponCopies(result.copy_id); }
+      await loadCatalogOptions(); await loadMissingFamilies(); await load();
+    } catch (error) { message.textContent = error.message; }
+    finally { button.disabled = false; }
+  }
+  document.getElementById('create-character').addEventListener('click', () =>
+    submitCatalog('characters', {
+      name:'new-character-name', element:'new-character-element',
+      boss_material:'new-character-boss',
+      common_drop_family:'new-character-common', local_specialty:'new-character-local',
+      talent_book_family:'new-character-talent',weekly_boss_type:'new-character-weekly'
+    }, 'create-character-message'));
+  document.getElementById('create-weapon').addEventListener('click', () =>
+    submitCatalog('weapons', {
+      name:'new-weapon-name',weapon_type:'new-weapon-type',rarity:'new-weapon-rarity',
+      ascension_family:'new-weapon-ascension',common_drop_family:'new-weapon-common',
+      elite_drop_family:'new-weapon-elite'
+    }, 'create-weapon-message'));
   async function saveInventory(material, input, button) {
     const message = document.getElementById('save-message');
     const raw = input.value.trim();
@@ -735,4 +970,5 @@ def home():
   loadWeaponCatalog().catch(error => { document.getElementById('add-copy-message').textContent = error.message; });
   loadTravellerElements().catch(error => { document.getElementById('traveller-message').textContent = error.message; });
   loadMissingFamilies().catch(error => { document.getElementById('family-message').textContent = error.message; });
+  loadCatalogOptions().catch(error => { document.getElementById('create-character-message').textContent = error.message; });
 </script></body></html>'''
