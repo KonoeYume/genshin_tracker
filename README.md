@@ -35,6 +35,8 @@ Python's `__pycache__/` files and the local `.venv/` environment are generated; 
 
 A weapon may have any number of copies. Goals and current progress belong to each copy, while its name, rarity, type, and material families belong to the weapon. The Goals summary counts **unique weapons**, rather than copies. The max calculation includes the first copy of each weapon; saved goals include the copies you have set up.
 
+Weapon copies store a `weapon_id` and a number within that weapon. Their displayed names are read from the weapon catalog, so renaming a weapon updates every copy. The first copy displays only the weapon name; additional copies may have an optional label. To upgrade an older database that still has `source_sheet`, back up `genshin_v2.db` and run `python migrate_weapon_copies.py` once.
+
 Saving current progress raises a target if the new current value passes it. It does **not** subtract spent materials from inventory. Update the owned total separately to match what you actually have.
 
 ### Reading the overview
@@ -50,6 +52,8 @@ Character and weapon EXP items are entered as item counts. Each EXP section tota
 ## Add and correct catalog data
 
 On **Add data → Add New**, use **New Character** or **New Weapon** to create an entry at level 1 and ascension 0 (with talents at level 1 for characters). New weapons start with Copy 1. The element determines a character's gem type. Choose existing material types when available.
+
+The World Boss Material and Local Speciality fields offer saved items in dropdowns. Choose **New Type…** at the bottom to enter a new single-item material while adding the character.
 
 Use **New Material** to choose a category such as Talent Material, Weapon Ascension Material, Common Enemy Drop, Elite Enemy Drop, Weekly Boss Drop, World Boss Drop, or Local Speciality. Enter a type name and the material names for its tiers, from lowest to highest. New materials start with zero owned. A completed type becomes available when adding characters or weapons and links entries that were waiting for that type.
 

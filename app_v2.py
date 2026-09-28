@@ -279,6 +279,11 @@ def catalog_options():
         result['talent_families'] = workbook_order('talent_book', set(result['talent_families'])|saved['talent_book'])
         result['ascension_families'] = workbook_order('weapon_ascension', set(result['ascension_families'])|saved['weapon_ascension'])
         result['weekly_boss_types'] = workbook_order('weekly_boss_drop', weekly)
+        types = material_types(db)
+        result['world_boss_materials'] = [entry['name'] for entry in types
+                                          if entry['category']=='character_boss_drop']
+        result['local_specialties'] = [entry['name'] for entry in types
+                                       if entry['category']=='local_specialty']
         return result
 
 
@@ -834,10 +839,12 @@ def main_page(view):
   <label>Name <input id="new-character-name" type="text"></label>
   <label>Element <select id="new-character-element"></select></label>
   <div class="catalog-value">Gem Type <span id="new-character-gem" class="read-only-field"></span></div>
-  <label>World Boss Material <input id="new-character-boss" type="text"></label>
+  <label>World Boss Material <select id="new-character-boss" data-new-id="new-character-boss-custom"></select>
+    <input id="new-character-boss-custom" type="text" placeholder="New World Boss Material" hidden></label>
   <label>Common Enemy Drop Type <select id="new-character-common" data-new-id="new-character-common-custom"></select>
     <input id="new-character-common-custom" type="text" placeholder="New Common Enemy Drop Type" hidden></label>
-  <label>Local Speciality <input id="new-character-local" type="text"></label>
+  <label>Local Speciality <select id="new-character-local" data-new-id="new-character-local-custom"></select>
+    <input id="new-character-local-custom" type="text" placeholder="New Local Speciality" hidden></label>
   <label>Talent Book Type <select id="new-character-talent" data-new-id="new-character-talent-custom"></select>
     <input id="new-character-talent-custom" type="text" placeholder="New Talent Book Type" hidden></label>
   <label>Weekly Boss Type <select id="new-character-weekly" data-new-id="new-character-weekly-custom"></select>
@@ -1431,6 +1438,8 @@ def main_page(view):
       select.onchange = toggle; toggle();
     }
     fillTypeSelect('new-character-common', options.common_families);
+    fillTypeSelect('new-character-boss', options.world_boss_materials);
+    fillTypeSelect('new-character-local', options.local_specialties);
     fillTypeSelect('new-weapon-common', options.common_families);
     fillTypeSelect('new-weapon-elite', options.elite_families);
     fillTypeSelect('new-character-weekly', options.weekly_boss_types);
