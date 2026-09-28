@@ -90,8 +90,8 @@ async function load() {
     if(['talent_book','weapon_ascension','common_drop','elite_drop','ascension_gem','weekly_boss_drop'].includes(section.category)){
       const info=document.createElement('p');info.className='note';
       info.textContent=section.category==='weekly_boss_drop' ?
-        'Convert columns show source items spent at 1:1 within each boss family. Inventory is not changed automatically.' :
-        'Convert columns show lower tier source items spent at 3:1 within each family. Inventory is not changed automatically.';
+        'Convert columns show outputs received at 1:1 within each boss family. Inventory is not changed automatically.' :
+        'Convert columns show outputs crafted from lower tiers at 3:1 within each family. Inventory is not changed automatically.';
       panel.append(info);
     }
     const wrap=document.createElement('div');wrap.className='scroll';const table=document.createElement('table');table.className='inventory-table';

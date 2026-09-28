@@ -185,9 +185,9 @@ def overview(db):
                 else:
                     missing = [max(0,item[required_field]-item['owned']) for item in group]
                     converted = [0]*len(group)
-                for item,shortage,spent in zip(group,missing,converted):
+                for item,shortage,outputs in zip(group,missing,converted):
                     item[needed_field] = shortage
-                    item[converted_field] = spent
+                    item[converted_field] = outputs
             start = end
     return {'sections':[section for section in sections.values() if section['materials']],
             'experience':{
