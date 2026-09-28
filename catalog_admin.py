@@ -150,8 +150,8 @@ def create_weapon(db, data):
         VALUES (?,?,?,?,?,?)''', (values[0], values[1], rarity, *values[2:]))
     wid = cursor.lastrowid
     copy = db.execute('''INSERT INTO weapon_copies
-        (weapon_id,copy_number,source_sheet,label,current_level,target_level,
-         current_ascension,target_ascension) VALUES (?,1,NULL,NULL,1,1,0,0)''',
+        (weapon_id,copy_number,label,current_level,target_level,
+         current_ascension,target_ascension) VALUES (?,1,NULL,1,1,0,0)''',
         (wid,))
     attach_named(db, 'weapon', wid, 'mora', 0, 'Mora', 'currency')
     missing = [role for role, field in (

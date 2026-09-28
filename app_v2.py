@@ -516,8 +516,8 @@ def add_weapon_copy(new: NewWeaponCopy):
         copy_number=db.execute('''SELECT COALESCE(MAX(copy_number),0)+1
             FROM weapon_copies WHERE weapon_id=?''',(new.weapon_id,)).fetchone()[0]
         cursor=db.execute('''INSERT INTO weapon_copies
-            (weapon_id,copy_number,source_sheet,label,current_level,target_level,current_ascension,target_ascension)
-            VALUES (?,?,NULL,?,1,1,0,0)''',(new.weapon_id,copy_number,label or None))
+            (weapon_id,copy_number,label,current_level,target_level,current_ascension,target_ascension)
+            VALUES (?,?,?,1,1,0,0)''',(new.weapon_id,copy_number,label or None))
         copy_id=cursor.lastrowid
     return weapon_copy_goal(copy_id)
 
@@ -526,9 +526,12 @@ def add_weapon_copy(new: NewWeaponCopy):
 def update_weapon_copy_label(copy_id: int, update: WeaponCopyLabelUpdate):
     label=update.label.strip() if update.label else None
     with sqlite3.connect(DB_PATH) as db:
-        result=db.execute('UPDATE weapon_copies SET label=? WHERE id=?',(label or None,copy_id))
-        if result.rowcount==0:
+        copy=db.execute('SELECT copy_number FROM weapon_copies WHERE id=?',(copy_id,)).fetchone()
+        if copy is None:
             raise HTTPException(status_code=404,detail='Weapon copy not found')
+        if copy[0]==1 and label:
+            raise HTTPException(status_code=422,detail='The first copy uses the weapon name without a label')
+        db.execute('UPDATE weapon_copies SET label=? WHERE id=?',(label or None,copy_id))
     return weapon_copy_goal(copy_id)
 
 
@@ -903,7 +906,7 @@ def main_page(view):
 <button id="update-weapon" type="button">Save Weapon Data</button> <span id="edit-weapon-message" role="status"></span>
 </details>
 <details><summary>Edit Weapon Copy Label</summary>
-<label>Weapon Copy <select id="edit-copy-select"></select></label>
+<label>Additional Weapon Copy <select id="edit-copy-select"></select></label>
 <label>Label (Optional) <input id="edit-copy-label" type="text" maxlength="80"></label>
 <button id="update-copy" type="button">Save Copy Label</button> <span id="edit-copy-message" role="status"></span>
 </details>
@@ -1551,8 +1554,8 @@ def main_page(view):
       optionsResponse.json(),copiesResponse.json(),typesResponse.json()]);
     selectEntries('edit-character-select',characters,characterId,'a character');
     selectEntries('edit-weapon-select',weapons,weaponId,'a weapon');
-    editCopies=copies;
-    selectEntries('edit-copy-select',copies.map(copy=>({id:copy.id,
+    editCopies=copies.filter(copy=>copy.copy_number>1);
+    selectEntries('edit-copy-select',editCopies.map(copy=>({id:copy.id,
       name:copy.name+' #'+copy.copy_number+(copy.label?' · '+copy.label:'')})),
       copyId,'a weapon copy');
     editMaterials=types;
