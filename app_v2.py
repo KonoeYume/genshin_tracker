@@ -7,7 +7,7 @@ import sqlite3
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from shopping_list import build
 from catalog_admin import FAMILY_TIERS, create_character, create_weapon
@@ -25,6 +25,15 @@ app = FastAPI(title='Genshin Tracker')
 class InventoryUpdate(BaseModel):
     material_name: str
     quantity: int = Field(ge=0)
+
+
+class InventoryBatchItem(BaseModel):
+    material_id: int = Field(gt=0)
+    quantity: int = Field(ge=0)
+
+
+class InventoryBatchUpdate(BaseModel):
+    updates: list[InventoryBatchItem]
 
 
 class CharacterGoalUpdate(BaseModel):
@@ -400,6 +409,28 @@ def update_inventory(update: InventoryUpdate):
     return {'material_name':update.material_name,'quantity':update.quantity}
 
 
+@app.put('/api/inventory/batch')
+def update_inventory_batch(batch: InventoryBatchUpdate):
+    ids = [item.material_id for item in batch.updates]
+    if len(ids) != len(set(ids)):
+        raise HTTPException(status_code=422, detail='Each material may be updated only once')
+    try:
+        with sqlite3.connect(DB_PATH) as db:
+            db.execute('PRAGMA foreign_keys=ON')
+            db.execute('BEGIN IMMEDIATE')
+            if ids:
+                existing = {row[0] for row in db.execute(
+                    f'SELECT id FROM materials WHERE id IN ({",".join("?" for _ in ids)})', ids)}
+                if len(existing) != len(ids):
+                    raise HTTPException(status_code=404, detail='One or more materials were not found')
+                db.executemany('''INSERT INTO inventory(material_id,quantity) VALUES (?,?)
+                    ON CONFLICT(material_id) DO UPDATE SET quantity=excluded.quantity''',
+                    [(item.material_id,item.quantity) for item in batch.updates])
+    except sqlite3.Error as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+    return {'updated':len(ids)}
+
+
 @app.get('/api/characters')
 def list_characters():
     with sqlite3.connect(DB_PATH) as db:
@@ -725,7 +756,22 @@ def save_material_family(update: MaterialFamilyUpdate):
 
 @app.get('/goals', response_class=HTMLResponse)
 def goals_screen():
-    return main_page('goals')
+    return RedirectResponse('/characters')
+
+
+@app.get('/goals/character', response_class=HTMLResponse)
+def character_goal_screen(character: int):
+    return main_page('character-goal')
+
+
+@app.get('/goals/weapon', response_class=HTMLResponse)
+def weapon_goal_screen(weapon: int):
+    return main_page('weapon-goal')
+
+
+@app.get('/goals/traveller', response_class=HTMLResponse)
+def traveller_goal_screen(traveller: str):
+    return main_page('traveller-goal')
 
 
 @app.get('/catalog', response_class=HTMLResponse)
@@ -734,9 +780,11 @@ def catalog_screen():
 
 
 def main_page(view):
+    page_title = {'catalog':'Add Data', 'character-goal':'Character Goal',
+                  'weapon-goal':'Weapon Goal', 'traveller-goal':'Traveller Goal'}[view]
     return '''<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Genshin Tracker</title>
+<title>''' + page_title + ''' · Genshin Tracker</title>
 <style>
   body { font-family: system-ui, sans-serif; max-width: 1100px; margin: 32px auto; padding: 0 16px;
          color: #232a36; background: #f8fafc; }
@@ -761,15 +809,27 @@ def main_page(view):
   .catalog-fields .read-only-field { display: flex; align-items: center;
     border: 1px solid #ccc; border-radius: 2px; background: #f8fafc; }
   details { margin: 20px 0; } li { margin: 6px 0; overflow-wrap: anywhere; }
-  body.goals-view .catalog-only, body.catalog-view .goals-only { display: none; }
+  .site-header { position: sticky; top: 0; z-index: 30; background: #f8fafc;
+                 padding: 10px 0 12px; box-shadow: 0 4px 8px -8px #263244; }
+  .site-title { font-size: 20px; font-weight: 700; margin-bottom: 10px; }
+  .site-header h1 { margin: 12px 0 0; } nav a { margin-right: 18px; }
+  body.catalog-view .goals-only,
+  body.character-goal-view .catalog-only, body.weapon-goal-view .catalog-only,
+  body.traveller-goal-view .catalog-only { display: none; }
+  body.character-goal-view .weapon-goal, body.character-goal-view .traveller-goal,
+  body.weapon-goal-view .character-goal, body.weapon-goal-view .traveller-goal,
+  body.traveller-goal-view .character-goal, body.traveller-goal-view .weapon-goal { display: none; }
   details.summary > summary { font-size: 1.35em; font-weight: bold; cursor: pointer; }
   @media (max-width: 600px) { body { margin: 12px auto; } th,td { padding: 7px 4px; font-size: 13px; } }
 </style></head><body class="''' + view + '''-view">
-<h1>Genshin Tracker</h1>
-<nav><a href="/">Inventory Overview</a> · <a href="/goals">Goals</a> · <a href="/characters">Characters</a> · <a href="/weapons">Weapons</a> · <a href="/traveller">Traveller</a> · <a href="/catalog">Add data</a></nav>
+<header class="site-header">
+<div class="site-title">Genshin Tracker</div>
+<nav><a href="/">Inventory Overview</a><a href="/characters">Characters</a><a href="/weapons">Weapons</a><a href="/traveller">Traveller</a><a href="/catalog">Add data</a></nav>
+<h1>''' + page_title + '''</h1>
+</header>
 <p class="note goals-only">Set targets and record current progress. View all materials on Inventory Overview.</p>
-<details class="summary goals-only" open><summary>Character Goal</summary>
-<label>Character <select id="character-select"></select></label>
+<details class="summary goals-only character-goal" open><summary>Character Goal</summary>
+<p>Character: <strong id="selected-character-name"></strong></p><select id="character-select" hidden></select>
 <div class="goal-group">
   <p class="goal-row">Current Level: <span id="character-current-level"></span></p>
   <div class="goal-row"><label>Target Level: <input id="character-level" type="number" min="1" max="90" step="1"></label></div>
@@ -780,7 +840,7 @@ def main_page(view):
 </div>
 <div id="talent-inputs"></div>
 <button id="save-character">Save Character Goal</button> <span id="goal-message" role="status"></span>
-<details><summary>Record Current Progress</summary>
+<details open><summary>Record Current Progress</summary>
 <label>Current Level <input id="record-character-level" type="number" min="1" max="90" step="1"></label>
 <label>Current Ascension <input id="record-character-ascension" type="number" min="0" max="6" step="1"></label>
 <div id="record-character-talents"></div>
@@ -788,9 +848,9 @@ def main_page(view):
 <span id="record-character-message" role="status"></span>
 </details>
 </details>
-<details class="summary goals-only"><summary>Weapon Goal</summary>
-<label>Weapon <select id="weapon-copy-select"></select></label>
-<p id="selected-weapon"></p>
+<details class="summary goals-only weapon-goal" open><summary>Weapon Goal</summary>
+<select id="weapon-copy-select" hidden></select>
+<p>Weapon: <strong id="selected-weapon"></strong></p>
 <div class="goal-group">
   <p class="goal-row">Current Level: <span id="weapon-current-level"></span></p>
   <div class="goal-row"><label>Target Level: <input id="weapon-level" type="number" min="1" max="90" step="1"></label></div>
@@ -800,7 +860,7 @@ def main_page(view):
   <div class="goal-row"><label>Target Ascension: <input id="weapon-ascension" type="number" min="0" max="6" step="1"></label></div>
 </div>
 <button id="save-weapon">Save Weapon Goal</button> <span id="weapon-message" role="status"></span>
-<details><summary>Record Current Progress</summary>
+<details open><summary>Record Current Progress</summary>
 <label>Current Level <input id="record-weapon-level" type="number" min="1" max="90" step="1"></label>
 <label>Current Ascension <input id="record-weapon-ascension" type="number" min="0" max="6" step="1"></label>
 <button id="record-weapon" type="button">Save Current Progress</button>
@@ -811,8 +871,8 @@ def main_page(view):
 <label>Label (Optional) <input id="copy-label" type="text" maxlength="80" placeholder="e.g. second copy"></label>
 <button id="add-weapon-copy">Add Copy</button> <span id="add-copy-message" role="status"></span>
 </details>
-<details class="summary goals-only"><summary>Traveller Goal</summary>
-<label>Element <select id="traveller-element"></select></label>
+<details class="summary goals-only traveller-goal" open><summary>Traveller Goal</summary>
+<p>Element: <strong id="selected-traveller-element"></strong></p><select id="traveller-element" hidden></select>
 <div class="goal-group">
   <p class="goal-row">Current Level: <span id="traveller-current-level"></span></p>
   <div class="goal-row"><label>Target Level: <input id="traveller-level" type="number" min="1" max="90" step="1"></label></div>
@@ -823,7 +883,7 @@ def main_page(view):
 </div>
 <div id="traveller-talents"></div>
 <button id="save-traveller">Save Traveller Goal</button> <span id="traveller-message" role="status"></span>
-<details><summary>Record Current Progress</summary>
+<details open><summary>Record Current Progress</summary>
 <label>Current Level <input id="record-traveller-level" type="number" min="1" max="90" step="1"></label>
 <label>Current Ascension <input id="record-traveller-ascension" type="number" min="0" max="6" step="1"></label>
 <div id="record-traveller-talents"></div>
@@ -892,11 +952,11 @@ def main_page(view):
   <label>Name <input id="edit-character-name" type="text"></label>
   <label>Element <select id="edit-character-element"></select></label>
   <div class="catalog-value">Gem Type <span id="edit-character-gem" class="read-only-field"></span></div>
-  <label>World Boss Material <input id="edit-character-boss" type="text"></label>
-  <label>Common Enemy Drop Type <input id="edit-character-common" type="text"></label>
-  <label>Local Speciality <input id="edit-character-local" type="text"></label>
-  <label>Talent Book Type <input id="edit-character-talent" type="text"></label>
-  <label>Weekly Boss Type <input id="edit-character-weekly" type="text"></label>
+  <label>World Boss Material <select id="edit-character-boss" data-new-id="edit-character-boss-custom"></select><input id="edit-character-boss-custom" type="text" placeholder="New type" hidden></label>
+  <label>Common Enemy Drop Type <select id="edit-character-common" data-new-id="edit-character-common-custom"></select><input id="edit-character-common-custom" type="text" placeholder="New type" hidden></label>
+  <label>Local Speciality <select id="edit-character-local" data-new-id="edit-character-local-custom"></select><input id="edit-character-local-custom" type="text" placeholder="New type" hidden></label>
+  <label>Talent Book Type <select id="edit-character-talent" data-new-id="edit-character-talent-custom"></select><input id="edit-character-talent-custom" type="text" placeholder="New type" hidden></label>
+  <label>Weekly Boss Type <select id="edit-character-weekly" data-new-id="edit-character-weekly-custom"></select><input id="edit-character-weekly-custom" type="text" placeholder="New type" hidden></label>
 </div>
 <button id="update-character" type="button">Save Character Data</button> <span id="edit-character-message" role="status"></span>
 </details>
@@ -906,9 +966,9 @@ def main_page(view):
   <label>Name <input id="edit-weapon-name" type="text"></label>
   <label>Type <select id="edit-weapon-type"></select></label>
   <label>Rarity <input id="edit-weapon-rarity" type="number" min="1" max="5" step="1"></label>
-  <label>Ascension Material Type <input id="edit-weapon-ascension" type="text"></label>
-  <label>Common Enemy Drop Type <input id="edit-weapon-common" type="text"></label>
-  <label>Elite Enemy Drop Type <input id="edit-weapon-elite" type="text"></label>
+  <label>Ascension Material Type <select id="edit-weapon-ascension" data-new-id="edit-weapon-ascension-custom"></select><input id="edit-weapon-ascension-custom" type="text" placeholder="New type" hidden></label>
+  <label>Common Enemy Drop Type <select id="edit-weapon-common" data-new-id="edit-weapon-common-custom"></select><input id="edit-weapon-common-custom" type="text" placeholder="New type" hidden></label>
+  <label>Elite Enemy Drop Type <select id="edit-weapon-elite" data-new-id="edit-weapon-elite-custom"></select><input id="edit-weapon-elite-custom" type="text" placeholder="New type" hidden></label>
 </div>
 <button id="update-weapon" type="button">Save Weapon Data</button> <span id="edit-weapon-message" role="status"></span>
 </details>
@@ -922,9 +982,9 @@ def main_page(view):
 <label>Element <select id="edit-traveller-element"></select></label>
 <label>Talent <select id="edit-traveller-slot"><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label>
 <div class="catalog-fields">
-  <label>Common Enemy Drop Type <input id="edit-traveller-common" type="text"></label>
-  <label>Talent Material Type <input id="edit-traveller-talent" type="text"></label>
-  <label>Weekly Boss Type <input id="edit-traveller-weekly" type="text"></label>
+  <label>Common Enemy Drop Type <select id="edit-traveller-common" data-new-id="edit-traveller-common-custom"></select><input id="edit-traveller-common-custom" type="text" placeholder="New type" hidden></label>
+  <label>Talent Material Type <select id="edit-traveller-talent" data-new-id="edit-traveller-talent-custom"></select><input id="edit-traveller-talent-custom" type="text" placeholder="New type" hidden></label>
+  <label>Weekly Boss Type <select id="edit-traveller-weekly" data-new-id="edit-traveller-weekly-custom"></select><input id="edit-traveller-weekly-custom" type="text" placeholder="New type" hidden></label>
 </div>
 <button id="update-traveller" type="button">Save Traveller Data</button> <span id="edit-traveller-message" role="status"></span>
 </details>
@@ -948,7 +1008,7 @@ def main_page(view):
 <p id="save-message" role="status" class="goals-only"></p>
 <table class="goals-only" hidden><thead><tr><th>Material</th><th>Required</th><th>Owned</th><th>Still Needed</th><th>Update Value</th><th>Action</th></tr></thead>
 <tbody id="materials"></tbody></table>
-<details class="goals-only" id="excluded-section"><summary id="excluded-title">Excluded goals</summary>
+<details class="goals-only" id="excluded-section" open><summary id="excluded-title">Excluded goals</summary>
 <ul id="excluded"></ul></details>
 <p class="note goals-only">EXP is shown as points. Using EXP items may overshoot and increase the Mora cost.</p>
 <script>
@@ -966,6 +1026,8 @@ def main_page(view):
       select.append(option);
     }
     select.value = selectedId ? String(selectedId) : '';
+    document.getElementById('selected-character-name').textContent =
+      select.value ? select.selectedOptions[0].textContent : 'Character not found';
     select.onchange = loadCharacterGoal;
     if (select.value) await loadCharacterGoal();
   }
@@ -1101,7 +1163,9 @@ def main_page(view):
     const response = await fetch('/api/weapon-copies/' + id);
     if (!response.ok) throw new Error('Could not load weapon copy.');
     const goal = await response.json();
-    document.getElementById('selected-weapon').textContent = `${goal.name} (${goal.rarity}-star)`;
+    document.getElementById('selected-weapon').textContent =
+      goal.name + (goal.copy_number>1 ? ' — ' + (goal.label || 'Copy ' + goal.copy_number) : '') +
+      ` (${goal.rarity}-star)`;
     document.getElementById('weapon-current-level').textContent = goal.current_level;
     document.getElementById('weapon-current-ascension').textContent = goal.current_ascension;
     const currentLevel = document.getElementById('record-weapon-level');
@@ -1186,7 +1250,7 @@ def main_page(view):
   }
   document.getElementById('record-weapon').addEventListener('click', recordWeaponProgress);
   document.getElementById('add-weapon-copy').addEventListener('click', addWeaponCopy);
-  async function loadTravellerElements() {
+  async function loadTravellerElements(selectedElement) {
     const response = await fetch('/api/traveller/elements');
     if (!response.ok) throw new Error('Could not load Traveller elements.');
     const elements = await response.json();
@@ -1197,7 +1261,9 @@ def main_page(view):
       const option = document.createElement('option');
       option.value = element; option.textContent = element; select.append(option);
     }
-    select.value = '';
+    select.value = selectedElement && elements.includes(selectedElement) ? selectedElement : '';
+    document.getElementById('selected-traveller-element').textContent = select.value || 'Element not found';
+    if (select.value) await loadTravellerGoal();
   }
   async function loadTravellerGoal() {
     const element = document.getElementById('traveller-element').value;
@@ -1499,6 +1565,40 @@ def main_page(view):
     }, 'create-weapon-message'));
   let editMaterials=[];
   let editCopies=[];
+  const editMaterialOptions={
+    'edit-character-boss':'world_boss_materials','edit-character-common':'common_families',
+    'edit-character-local':'local_specialties','edit-character-talent':'talent_families',
+    'edit-character-weekly':'weekly_boss_types','edit-weapon-ascension':'ascension_families',
+    'edit-weapon-common':'common_families','edit-weapon-elite':'elite_families',
+    'edit-traveller-common':'common_families','edit-traveller-talent':'talent_families',
+    'edit-traveller-weekly':'weekly_boss_types'
+  };
+  function editMaterialValue(id) {
+    const select=document.getElementById(id);
+    return (select.value==='__new__' ?
+      document.getElementById(select.dataset.newId).value : select.value).trim();
+  }
+  function setEditMaterialValue(id,value) {
+    const select=document.getElementById(id);
+    const custom=document.getElementById(select.dataset.newId);
+    if([...select.options].some(option=>option.value===(value||''))) {
+      select.value=value||'';custom.value='';
+    } else {select.value='__new__';custom.value=value||'';}
+    custom.hidden=select.value!=='__new__';
+  }
+  function fillEditMaterialOptions(options) {
+    for(const [id,key] of Object.entries(editMaterialOptions)) {
+      const select=document.getElementById(id);
+      const current=editMaterialValue(id);
+      select.replaceChildren();select.add(new Option('',''));
+      for(const value of options[key])select.add(new Option(value,value));
+      select.add(new Option('New Type…','__new__'));
+      select.onchange=()=>{
+        document.getElementById(select.dataset.newId).hidden=select.value!=='__new__';
+      };
+      setEditMaterialValue(id,current);
+    }
+  }
   async function loadEditTraveller(){
     const element=document.getElementById('edit-traveller-element').value;
     const slot=document.getElementById('edit-traveller-slot').value;
@@ -1508,7 +1608,7 @@ def main_page(view):
     const data=await response.json();
     for(const [key,value] of Object.entries({common:data.common_drop_family,
       talent:data.talent_material_type,weekly:data.weekly_boss_type}))
-      document.getElementById('edit-traveller-'+key).value=value||'';
+      setEditMaterialValue('edit-traveller-'+key,value||'');
   }
   async function setupEditTraveller(element,slot){
     const response=await fetch('/api/traveller/elements');
@@ -1527,9 +1627,9 @@ def main_page(view):
     const element=document.getElementById('edit-traveller-element').value;
     const slot=document.getElementById('edit-traveller-slot').value;
     const message=document.getElementById('edit-traveller-message');
-    const data={common_drop_family:document.getElementById('edit-traveller-common').value.trim(),
-      talent_material_type:document.getElementById('edit-traveller-talent').value.trim(),
-      weekly_boss_type:document.getElementById('edit-traveller-weekly').value.trim()};
+    const data={common_drop_family:editMaterialValue('edit-traveller-common'),
+      talent_material_type:editMaterialValue('edit-traveller-talent'),
+      weekly_boss_type:editMaterialValue('edit-traveller-weekly')};
     if(!element){message.textContent='Select an element first.';return;}
     const button=document.getElementById('update-traveller');button.disabled=true;
     try{
@@ -1561,6 +1661,7 @@ def main_page(view):
     const [characters,weapons,materialData,options,copies,types]=await Promise.all([
       charactersResponse.json(),weaponsResponse.json(),materialsResponse.json(),
       optionsResponse.json(),copiesResponse.json(),typesResponse.json()]);
+    fillEditMaterialOptions(options);
     selectEntries('edit-character-select',characters,characterId,'a character');
     selectEntries('edit-weapon-select',weapons,weaponId,'a weapon');
     editCopies=copies.filter(copy=>copy.copy_number>1);
@@ -1629,7 +1730,8 @@ def main_page(view):
     const id=document.getElementById('edit-character-select').value;
     if(!id){
       for(const key of ['name','element','boss','common','local','talent','weekly'])
-        document.getElementById('edit-character-'+key).value='';
+        if(['boss', 'common', 'local', 'talent', 'weekly'].includes(key)) setEditMaterialValue('edit-character-'+key,'');
+        else document.getElementById('edit-character-'+key).value='';
       document.getElementById('edit-character-gem').textContent='';return;
     }
     const response=await fetch('/api/catalog/characters/'+id);
@@ -1638,14 +1740,16 @@ def main_page(view):
     for(const [key,value] of Object.entries({name:c.name,element:c.element,
       boss:c.boss_material,common:c.common_drop_family,local:c.local_specialty,
       talent:c.talent_book_family,weekly:c.weekly_boss_type}))
-      document.getElementById('edit-character-'+key).value=value||'';
+      if(['boss', 'common', 'local', 'talent', 'weekly'].includes(key)) setEditMaterialValue('edit-character-'+key,value||'');
+      else document.getElementById('edit-character-'+key).value=value||'';
     document.getElementById('edit-character-gem').textContent=c.gem_family;
   }
   async function loadEditWeapon() {
     const id=document.getElementById('edit-weapon-select').value;
     if(!id){
       for(const key of ['name','type','rarity','ascension','common','elite'])
-        document.getElementById('edit-weapon-'+key).value='';
+        if(['ascension', 'common', 'elite'].includes(key)) setEditMaterialValue('edit-weapon-'+key,'');
+        else document.getElementById('edit-weapon-'+key).value='';
       return;
     }
     const response=await fetch('/api/catalog/weapons/'+id);
@@ -1653,7 +1757,8 @@ def main_page(view):
     const w=await response.json();
     for(const [key,value] of Object.entries({name:w.name,type:w.weapon_type,rarity:w.rarity,
       ascension:w.ascension_family,common:w.common_drop_family,elite:w.elite_drop_family}))
-      document.getElementById('edit-weapon-'+key).value=value??'';
+      if(['ascension', 'common', 'elite'].includes(key)) setEditMaterialValue('edit-weapon-'+key,value??'');
+      else document.getElementById('edit-weapon-'+key).value=value??'';
   }
   async function saveEdit(kind) {
     const id=document.getElementById('edit-'+kind+'-select').value;
@@ -1666,7 +1771,9 @@ def main_page(view):
         ascension_family:'ascension',common_drop_family:'common',elite_drop_family:'elite'};
     const data={};
     for(const [key,suffix] of Object.entries(fields)){
-      const value=document.getElementById('edit-'+kind+'-'+suffix).value.trim();
+      const controlId='edit-'+kind+'-'+suffix;
+      const value=editMaterialOptions[controlId] ? editMaterialValue(controlId) :
+        document.getElementById(controlId).value.trim();
       if(!value){message.textContent='Fill in every field.';return;}
       data[key]=key==='rarity'?Number(value):value;
     }
@@ -1793,17 +1900,23 @@ def main_page(view):
       }
     } catch (error) { summary.textContent = error.message; }
   }
-  load();
   const selected = new URLSearchParams(location.search);
-  loadCharacters(selected.get('character')).catch(error => { document.getElementById('goal-message').textContent = error.message; });
-  loadWeaponCopies(selected.get('weapon')).catch(error => { document.getElementById('weapon-message').textContent = error.message; });
-  loadWeaponCatalog().catch(error => { document.getElementById('add-copy-message').textContent = error.message; });
-  loadTravellerElements().catch(error => { document.getElementById('traveller-message').textContent = error.message; });
-  loadMissingFamilies().catch(error => { document.getElementById('family-message').textContent = error.message; });
-  setupEditTraveller(selected.get('traveller'),selected.get('slot')).catch(error=>{
-    document.getElementById('edit-traveller-message').textContent=error.message;});
-  loadCatalogOptions().then(()=>loadEditCatalog(selected.get('character'),selected.get('weapon'),
-    selected.get('material'),selected.get('copy'))).catch(error => {
-      document.getElementById('create-character-message').textContent = error.message;
-    });
+  const view = document.body.className;
+  if (view !== 'catalog-view') load();
+  if (view === 'character-goal-view')
+    loadCharacters(selected.get('character')).catch(error => { document.getElementById('goal-message').textContent = error.message; });
+  if (view === 'weapon-goal-view') {
+    loadWeaponCopies(selected.get('weapon')).catch(error => { document.getElementById('weapon-message').textContent = error.message; });
+    loadWeaponCatalog().catch(error => { document.getElementById('add-copy-message').textContent = error.message; });
+  }
+  if (view === 'traveller-goal-view')
+    loadTravellerElements(selected.get('traveller')).catch(error => { document.getElementById('traveller-message').textContent = error.message; });
+  if (view === 'catalog-view') {
+    loadMissingFamilies().catch(error => { document.getElementById('family-message').textContent = error.message; });
+    loadCatalogOptions().then(()=>loadEditCatalog(selected.get('character'),selected.get('weapon'),
+      selected.get('material'),selected.get('copy'))).then(()=>
+        setupEditTraveller(selected.get('traveller'),selected.get('slot'))).catch(error => {
+        document.getElementById('create-character-message').textContent = error.message;
+      });
+  }
 </script></body></html>'''

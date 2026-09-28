@@ -28,9 +28,9 @@ Python's `__pycache__/` files and the local `.venv/` environment are generated; 
 
 | Page | What it does |
 | --- | --- |
-| **Inventory Overview** (`/`) | Lists materials by category and family. Enter the **new total owned** in **Update Value**, then save. It shows requirements for saved goals and for maxing the catalog. |
-| **Goals** (`/goals`) | Set target levels, ascensions, and talents for characters, weapon copies, and Traveller elements. **Record Current Progress** after leveling up. The page also lists goals excluded because their costs are incomplete. |
-| **Characters**, **Weapons**, **Traveller** | View progress in separate tables. Click headings to sort, enter text below headings to filter, and use **Show or Hide Columns** to choose visible columns. These view choices reset on reload. The far-right **Actions** column opens the relevant editor. |
+| **Inventory Overview** (`/`) | Lists materials by category and family. Enter the **new total owned** in any Update Value boxes, then choose **Save All** in the sticky header. Blank boxes are left unchanged; `0` can be saved. It shows requirements for saved goals and for maxing the catalog. |
+| **Character, Weapon, and Traveller Goals** | Click a character name, weapon name, or Traveller element on its progress page to open that entry's goal page. Set targets and use **Record Current Progress** after leveling up. Goal pages show exclusions when costs are incomplete. |
+| **Characters**, **Weapons**, **Traveller** | View progress in separate tables. Click headings to sort, enter text below headings to filter, and use **Show or Hide Columns** to choose visible columns. The column checkboxes and **Show All** / **Hide All** are saved separately for each page in this browser. Sorting and filters reset on reload. The far-right **Actions** column opens the relevant editor. |
 | **Add data** (`/catalog`) | Add characters, weapons, and material types; edit existing data; complete missing material types. |
 
 A weapon may have any number of copies. Goals and current progress belong to each copy, while its name, rarity, type, and material families belong to the weapon. The Goals summary counts **unique weapons**, rather than copies. The max calculation includes the first copy of each weapon; saved goals include the copies you have set up.

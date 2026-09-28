@@ -19,30 +19,54 @@ body.progress-page{max-width:1800px}.progress-table{width:max-content;min-width:
 .progress-table th,.progress-table td{padding:10px 14px}
 .progress-table td:last-child{white-space:nowrap}
 .column-options{display:flex;flex-wrap:wrap;gap:8px 18px;margin:10px 0}.column-options label{white-space:nowrap}
+.column-actions{display:flex;gap:8px;margin:10px 0}
+.site-header{position:sticky;top:0;z-index:30;background:#f8fafc;padding:10px 0 12px;
+  box-shadow:0 4px 8px -8px #263244}
+.site-header h1{margin:12px 0 0}.site-title{font-size:20px;font-weight:700;margin-bottom:10px}
+.inventory-header-actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
 </style>'''
 
 
 def overview_page():
     return '''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Inventory Overview · Genshin Tracker</title>''' + STYLE + '''</head><body>
-<nav><a href="/">Inventory Overview</a><a href="/goals">Goals</a><a href="/characters">Characters</a><a href="/weapons">Weapons</a><a href="/traveller">Traveller</a><a href="/catalog">Add data</a></nav>
+<header class="site-header inventory-header">
+<div class="site-title">Genshin Tracker</div>
+<nav><a href="/">Inventory Overview</a><a href="/characters">Characters</a><a href="/weapons">Weapons</a><a href="/traveller">Traveller</a><a href="/catalog">Add data</a></nav>
 <h1>Inventory Overview</h1>
+<div class="inventory-header-actions"><button id="save-all" type="button">Save All</button><span id="save-status" role="status"></span></div>
+</header>
 <div id="warnings"></div><div id="sections">Loading…</div>
-<p id="save-status" role="status"></p>
 <script>
 const fmt = new Intl.NumberFormat();
 const n = x => fmt.format(x);
 function cell(row, value, className='') {const td=row.insertCell();td.textContent=value;td.className=className;return td;}
-async function save(name, input, button) {
-  const raw=input.value.trim(), quantity=Number(raw), message=document.getElementById('save-status');
-  if (!raw || !Number.isSafeInteger(quantity) || quantity<0) {message.textContent='Enter a whole number of zero or more.';return;}
-  button.disabled=true;
+async function saveAll() {
+  const message=document.getElementById('save-status');
+  const inputs=[...document.querySelectorAll('#sections input[data-material-id]')];
+  const updates=[];
+  for(const input of inputs) {
+    const raw=input.value.trim();
+    if (!raw) continue;
+    const quantity=Number(raw);
+    if (!Number.isSafeInteger(quantity) || quantity<0) {
+      message.textContent='Enter a whole number of zero or more for '+input.dataset.materialName+'.';
+      input.focus();return;
+    }
+    updates.push({material_id:Number(input.dataset.materialId),quantity});
+  }
+  if (!updates.length) {message.textContent='Enter at least one update value.';return;}
+  const button=document.getElementById('save-all');button.disabled=true;
+  for(const input of inputs)input.disabled=true;
   try {
-    const response=await fetch('/api/inventory',{method:'PUT',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({material_name:name,quantity})});
-    if(!response.ok) throw new Error('Could not save '+name+' (HTTP '+response.status+').');
-    await load();message.textContent=name+' saved.';
-  } catch(error){message.textContent=error.message;} finally{button.disabled=false;}
+    const response=await fetch('/api/inventory/batch',{method:'PUT',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({updates})});
+    if(!response.ok) throw new Error('Could not save inventory (HTTP '+response.status+').');
+    await load();message.textContent=updates.length+' item'+(updates.length===1?'':'s')+' saved.';
+  } catch(error){message.textContent=error.message;} finally{
+    button.disabled=false;
+    for(const input of inputs)input.disabled=false;
+  }
 }
 async function load() {
   const response=await fetch('/api/overview');
@@ -72,8 +96,8 @@ async function load() {
     }
     const wrap=document.createElement('div');wrap.className='scroll';const table=document.createElement('table');table.className='inventory-table';
     const head=table.createTHead().insertRow();
-    const titles=isExp ? ['Item','Items Owned','Update Value',''] :
-      ['Material','Required','Owned','Still Needed','Convert (Goal)','Max Required','To Max','Convert (Max)','Update Value',''];
+    const titles=isExp ? ['Item','Items Owned','Update Value'] :
+      ['Material','Required','Owned','Still Needed','Convert (Goal)','Max Required','To Max','Convert (Max)','Update Value'];
     for(const title of titles) {
       const th=document.createElement('th');th.textContent=title;head.append(th);
     }
@@ -99,10 +123,10 @@ async function load() {
         cell(row,n(material.max_still_needed),'num');
         cell(row,n(material.convert_for_max),'num');
       }
-      const input=document.createElement('input');input.type='number';input.min='0';input.step='1';input.setAttribute('aria-label','Update '+material.name);
+      const input=document.createElement('input');input.type='number';input.min='0';input.step='1';
+      input.dataset.materialId=material.id;input.dataset.materialName=material.name;
+      input.setAttribute('aria-label','Update '+material.name);
       cell(row,'','control').append(input);
-      const button=document.createElement('button');button.textContent='Save';cell(row,'','control').append(button);
-      button.addEventListener('click',()=>save(material.name,input,button));
     }
     if(isExp){
       const foot=table.createTFoot();
@@ -116,12 +140,13 @@ async function load() {
         heading.scope='row';heading.textContent=label;row.append(heading);
         const valueCell=cell(row,n(value),'num');
         if(label==='EXP Remaining' && value>0)valueCell.classList.add('deficit');
-        const spacer=cell(row,'');spacer.colSpan=2;
+        cell(row,'');
       }
     }
     wrap.append(table);panel.append(wrap);root.append(panel);
   }
 }
+document.getElementById('save-all').addEventListener('click',saveAll);
 load().catch(error=>{document.getElementById('sections').textContent=error.message;});
 </script></body></html>'''
 
@@ -133,10 +158,16 @@ def progress_page(kind='characters'):
              'traveller':'Traveller Progress'}[kind]
     page = '''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>__TITLE__ · Genshin Tracker</title>''' + STYLE + '''</head><body class="progress-page">
-<nav><a href="/">Inventory Overview</a><a href="/goals">Goals</a><a href="/characters">Characters</a><a href="/weapons">Weapons</a><a href="/traveller">Traveller</a><a href="/catalog">Add data</a></nav>
-<h1>__TITLE__</h1><p class="note">Click a heading to sort, or use the filter beneath it. Sorting, filters, and column choices reset when the page reloads.</p>
+<header class="site-header">
+<div class="site-title">Genshin Tracker</div>
+<nav><a href="/">Inventory Overview</a><a href="/characters">Characters</a><a href="/weapons">Weapons</a><a href="/traveller">Traveller</a><a href="/catalog">Add data</a></nav>
+<h1>__TITLE__</h1>
+</header>
+<p class="note">Click a heading to sort, or use the filter beneath it. Column choices persist on this device; sorting and filters reset when the page reloads.</p>
 <section><p id="shared-progress"></p><button type="button" id="clear-filters">Clear filters</button>
-<details><summary>Show or Hide Columns</summary><div id="column-options" class="column-options"></div></details>
+<details><summary>Show or Hide Columns</summary>
+<div class="column-actions"><button type="button" id="show-all-columns">Show All</button><button type="button" id="hide-all-columns">Hide All</button></div>
+<div id="column-options" class="column-options"></div></details>
 <div class="scroll"><table class="progress-table"><thead id="progress-head"></thead><tbody id="progress-body"></tbody></table></div></section>
 <p id="status" role="status"></p><script>
 const kind='__KIND__';
@@ -159,20 +190,43 @@ const definitions={
     ['target_level','Target Level',true]]
 };
 const columns=definitions[kind], filters={};
-const visibleColumns=new Set(columns.map(column=>column[0]).concat('actions'));
+const allColumns=columns.map(column=>column[0]).concat('actions');
+const columnStorageKey='genshin-tracker:progress-columns:'+kind;
+function savedColumns(){
+  try {
+    const stored=JSON.parse(localStorage.getItem(columnStorageKey));
+    if(Array.isArray(stored))return stored.filter(key=>allColumns.includes(key));
+  } catch(error) { /* Browser storage may be unavailable; keep defaults. */ }
+  return allColumns;
+}
+const visibleColumns=new Set(savedColumns());
+function rememberColumns(){
+  try {localStorage.setItem(columnStorageKey,JSON.stringify([...visibleColumns]));}
+  catch(error) { /* The checkboxes still work for this visit. */ }
+}
 let rows=[],sortKey=kind==='weapons'?'weapon_id':kind==='traveller'?'order_id':'id',sortDirection=1;
 const collator=new Intl.Collator(undefined,{numeric:true,sensitivity:'base'});
+function syncColumnOptions(){
+  for(const input of document.querySelectorAll('#column-options input[data-column]'))
+    input.checked=visibleColumns.has(input.dataset.column);
+}
+function setAllColumns(show){
+  visibleColumns.clear();
+  if(show)for(const key of allColumns)visibleColumns.add(key);
+  else for(const key of Object.keys(filters))delete filters[key];
+  rememberColumns();syncColumnOptions();buildHead();render();
+}
 function buildColumnOptions(){
   const options=document.getElementById('column-options');
   for(const [key,label] of [...columns,['actions','Actions']]){
     const wrapper=document.createElement('label'),input=document.createElement('input');
-    input.type='checkbox';input.checked=true;input.setAttribute('aria-label','Show '+label);
+    input.type='checkbox';input.dataset.column=key;input.checked=visibleColumns.has(key);
+    input.setAttribute('aria-label','Show '+label);
     input.addEventListener('change',()=>{
-      if(!input.checked && visibleColumns.size===1){input.checked=true;return;}
       if(input.checked)visibleColumns.add(key);
       else {visibleColumns.delete(key);delete filters[key];
         if(sortKey===key){sortKey=kind==='weapons'?'weapon_id':kind==='traveller'?'order_id':'id';sortDirection=1;}}
-      buildHead();render();
+      rememberColumns();buildHead();render();
     });
     wrapper.append(input,' '+label);options.append(wrapper);
   }
@@ -212,6 +266,10 @@ function buildHead(){
 }
 function render(){
   const body=document.getElementById('progress-body');body.replaceChildren();
+  if(!visibleColumns.size){
+    document.getElementById('status').textContent='All columns are hidden. Select a checkbox or choose Show All.';
+    return;
+  }
   const visible=rows.filter(row=>columns.every(([key,,numeric])=>{
     const filter=(filters[key]||'').trim().toLocaleLowerCase();
     if(!filter)return true;
@@ -227,9 +285,11 @@ function render(){
     for(const [key] of columns){
       if(!visibleColumns.has(key))continue;
       const cell=row.insertCell(),value=item[key]??'—';
-      if(key==='name' && kind!=='traveller'){
-        const link=document.createElement('a');link.href='/goals?'+
-          (kind==='characters'?'character='+encodeURIComponent(item.id):'weapon='+encodeURIComponent(item.copy_id));
+      if((key==='name' && kind!=='traveller') || (key==='element' && kind==='traveller')){
+        const link=document.createElement('a');link.href=
+          kind==='characters'?'/goals/character?character='+encodeURIComponent(item.id):
+          kind==='weapons'?'/goals/weapon?weapon='+encodeURIComponent(item.copy_id):
+          '/goals/traveller?traveller='+encodeURIComponent(item.element);
         link.textContent=value;cell.append(link);
       } else cell.textContent=value;
     }
@@ -240,7 +300,7 @@ function render(){
        kind==='weapons'?'weapon='+encodeURIComponent(item.weapon_id):
        'traveller='+encodeURIComponent(item.element)+'&slot='+encodeURIComponent(item.talent_slot));
     edit.textContent='Edit data';actions.append(edit);
-    if(kind==='weapons'){
+    if(kind==='weapons' && item.copy_number>1){
       const copyEdit=document.createElement('a');
       copyEdit.href='/catalog?copy='+encodeURIComponent(item.copy_id);
       copyEdit.textContent='Edit label';actions.append(' · ',copyEdit);
@@ -262,6 +322,8 @@ document.getElementById('clear-filters').addEventListener('click',()=>{
   sortKey=kind==='weapons'?'weapon_id':kind==='traveller'?'order_id':'id';sortDirection=1;
   buildHead();render();
 });
+document.getElementById('show-all-columns').addEventListener('click',()=>setAllColumns(true));
+document.getElementById('hide-all-columns').addEventListener('click',()=>setAllColumns(false));
 buildColumnOptions();
 load().catch(error=>{document.getElementById('status').textContent=error.message;});
 </script></body></html>'''
