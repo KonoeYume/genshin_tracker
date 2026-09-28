@@ -19,6 +19,7 @@ def build(db):
     totals = Counter()
     owned_by_name = {}
     included = Counter()
+    included_weapons = set()
     excluded = []
     character_exp = weapon_exp = 0
     # Individual calculators return required amounts; discard their individual
@@ -35,7 +36,7 @@ def build(db):
             totals[material] += required
             owned_by_name[material] = owned
 
-    for copy_id, name in db.execute('''SELECT wc.id, w.name FROM weapon_copies wc
+    for copy_id, weapon_id, name in db.execute('''SELECT wc.id,w.id,w.name FROM weapon_copies wc
         JOIN weapons w ON w.id = wc.weapon_id ORDER BY wc.id''').fetchall():
         try:
             _, exp, _, materials = weapon_requirements(db, name, copy_id)
@@ -43,6 +44,7 @@ def build(db):
             excluded.append(f'Weapon copy {copy_id} ({name}): {error}')
             continue
         included['weapon copies'] += 1
+        included_weapons.add(weapon_id)
         weapon_exp += exp
         for material, required, owned, _ in materials:
             totals[material] += required
@@ -57,6 +59,7 @@ def build(db):
         for material, required, owned, _ in materials:
             totals[material] += required
             owned_by_name[material] = owned
+    included['weapons'] = len(included_weapons)
     return totals, owned_by_name, included, excluded, character_exp, weapon_exp
 
 

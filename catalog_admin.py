@@ -16,12 +16,35 @@ GEM_SUFFIXES = {2: 'Sliver', 3: 'Fragment', 4: 'Chunk', 5: 'Gemstone'}
 
 
 def material(db, name, category):
+    if category in ('currency','talent_special'):
+        existing=db.execute('SELECT id FROM materials WHERE category=? ORDER BY id LIMIT 1',
+                            (category,)).fetchone()
+        if existing is not None:
+            db.execute('''INSERT INTO inventory(material_id,quantity) VALUES (?,0)
+                ON CONFLICT(material_id) DO NOTHING''',(existing[0],))
+            return existing[0]
     db.execute('''INSERT INTO materials(name,category) VALUES (?,?)
         ON CONFLICT(name) DO NOTHING''', (name, category))
     mid = db.execute('SELECT id FROM materials WHERE name=?', (name,)).fetchone()[0]
     db.execute('''INSERT INTO inventory(material_id,quantity) VALUES (?,0)
         ON CONFLICT(material_id) DO NOTHING''', (mid,))
     return mid
+
+
+def gem_material(db, family, tier, suffix, excluded_character=None):
+    existing=db.execute('''SELECT cm.material_id FROM characters c
+        JOIN character_materials cm ON cm.character_id=c.id
+        WHERE c.gem_family=? AND cm.material_role='gem' AND cm.tier=?
+        AND (? IS NULL OR c.id!=?) ORDER BY c.id LIMIT 1''',
+        (family,tier,excluded_character,excluded_character)).fetchone()
+    return existing[0] if existing else material(db,f'{family} {suffix}','ascension_gem')
+
+
+def attach_id(db, kind, entity_id, role, tier, material_id):
+    table, id_col = (('character_materials','character_id') if kind == 'character'
+                     else ('weapon_materials','weapon_id'))
+    db.execute(f'''INSERT INTO {table}({id_col},material_role,tier,material_id)
+        VALUES (?,?,?,?)''',(entity_id,role,tier,material_id))
 
 
 def family_links(db, role, family):
@@ -99,8 +122,7 @@ def create_character(db, data):
     db.executemany('INSERT INTO talent_progress VALUES (?,?,1,1)',
                    [(cid, slot) for slot in (1,2,3)])
     for tier, suffix in GEM_SUFFIXES.items():
-        attach_named(db, 'character', cid, 'gem', tier,
-                     f'{gem_family} {suffix}', 'ascension_gem')
+        attach_id(db,'character',cid,'gem',tier,gem_material(db,gem_family,tier,suffix,cid))
     for role, field, category in (
         ('boss_drop','boss_material','character_boss_drop'),
         ('local_specialty','local_specialty','local_specialty')):

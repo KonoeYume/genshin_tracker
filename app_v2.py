@@ -11,6 +11,12 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from shopping_list import build
 from catalog_admin import FAMILY_TIERS, create_character, create_weapon
+from overview_data import overview, progress_lists
+from dashboard_pages import overview_page, progress_page
+from catalog_edit import (MATERIAL_CATEGORIES, edit_character, edit_weapon,
+                          edit_material, traveller_details, edit_traveller,
+                          create_material_type)
+from material_type_edit import material_types, update_material_type
 
 DB_PATH = Path(__file__).resolve().parent / 'genshin_v2.db'
 app = FastAPI(title='Genshin Tracker')
@@ -27,13 +33,28 @@ class CharacterGoalUpdate(BaseModel):
     talent_targets: list[int]
 
 
+class CharacterProgressUpdate(BaseModel):
+    current_level: int = Field(ge=1, le=90)
+    current_ascension: int = Field(ge=0, le=6)
+    talent_levels: list[int]
+
+
 class WeaponGoalUpdate(BaseModel):
     target_level: int = Field(ge=1, le=90)
     target_ascension: int = Field(ge=0, le=6)
 
 
+class WeaponProgressUpdate(BaseModel):
+    current_level: int = Field(ge=1, le=90)
+    current_ascension: int = Field(ge=0, le=6)
+
+
 class NewWeaponCopy(BaseModel):
     weapon_id: int
+    label: str | None = Field(default=None, max_length=80)
+
+
+class WeaponCopyLabelUpdate(BaseModel):
     label: str | None = Field(default=None, max_length=80)
 
 
@@ -43,10 +64,27 @@ class TravellerGoalUpdate(BaseModel):
     talent_targets: list[int]
 
 
+class TravellerProgressUpdate(BaseModel):
+    current_level: int = Field(ge=1, le=90)
+    current_ascension: int = Field(ge=0, le=6)
+    talent_levels: list[int]
+
+
 class MaterialFamilyUpdate(BaseModel):
     material_role: str
     family: str
     material_names: list[str]
+
+
+@app.post('/api/material-types', status_code=201)
+def add_material_type(update: MaterialFamilyUpdate):
+    try:
+        with sqlite3.connect(DB_PATH) as db:
+            db.execute('PRAGMA foreign_keys=ON')
+            db.execute('BEGIN IMMEDIATE')
+            return create_material_type(db,update.material_role,update.family,update.material_names)
+    except (ValueError,sqlite3.IntegrityError) as error:
+        raise HTTPException(status_code=422,detail=str(error)) from error
 
 
 class NewCharacter(BaseModel):
@@ -68,6 +106,145 @@ class NewWeapon(BaseModel):
     elite_drop_family: str
 
 
+class MaterialCatalogUpdate(BaseModel):
+    name: str
+    category: str
+
+
+class MaterialTypeUpdate(BaseModel):
+    key: str
+    name: str
+    category: str
+    materials: list[dict]
+
+
+@app.get('/api/catalog/material-types')
+def catalog_material_types():
+    with sqlite3.connect(DB_PATH) as db:
+        return material_types(db)
+
+
+@app.put('/api/catalog/material-types')
+def save_catalog_material_type(update: MaterialTypeUpdate):
+    try:
+        with sqlite3.connect(DB_PATH) as db:
+            db.execute('PRAGMA foreign_keys=ON')
+            db.execute('BEGIN IMMEDIATE')
+            return update_material_type(db,update.key,update.name,update.category,update.materials)
+    except LookupError as error:
+        raise HTTPException(status_code=404,detail=str(error)) from error
+    except sqlite3.IntegrityError as error:
+        raise HTTPException(status_code=409,detail='Name or type already exists') from error
+    except (ValueError,KeyError,TypeError) as error:
+        raise HTTPException(status_code=422,detail=str(error)) from error
+
+
+class TravellerCatalogUpdate(BaseModel):
+    common_drop_family: str
+    talent_material_type: str
+    weekly_boss_type: str
+
+
+@app.get('/api/catalog/traveller/{element}/{slot}')
+def catalog_traveller(element: str, slot: int):
+    try:
+        with sqlite3.connect(DB_PATH) as db:
+            return traveller_details(db,element,slot)
+    except LookupError as error:
+        raise HTTPException(status_code=404,detail=str(error)) from error
+
+
+@app.put('/api/catalog/traveller/{element}/{slot}')
+def update_catalog_traveller(element: str, slot: int, update: TravellerCatalogUpdate):
+    try:
+        with sqlite3.connect(DB_PATH) as db:
+            db.execute('BEGIN IMMEDIATE')
+            return edit_traveller(db,element,slot,update.model_dump())
+    except LookupError as error:
+        raise HTTPException(status_code=404,detail=str(error)) from error
+
+
+@app.get('/api/catalog/characters/{character_id}')
+def catalog_character(character_id: int):
+    with sqlite3.connect(DB_PATH) as db:
+        db.row_factory=sqlite3.Row
+        row=db.execute('''SELECT id,name,element,gem_family,boss_material,
+            common_drop_family,local_specialty,talent_book_family,
+            weekly_boss_material AS weekly_boss_type FROM characters WHERE id=?''',
+            (character_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404,detail='Character not found')
+        return dict(row)
+
+
+@app.put('/api/catalog/characters/{character_id}')
+def update_catalog_character(character_id: int, update: NewCharacter):
+    try:
+        with sqlite3.connect(DB_PATH) as db:
+            db.execute('PRAGMA foreign_keys=ON')
+            db.execute('BEGIN IMMEDIATE')
+            missing=edit_character(db,character_id,update.model_dump())
+    except LookupError as error:
+        raise HTTPException(status_code=404,detail=str(error)) from error
+    except sqlite3.IntegrityError as error:
+        raise HTTPException(status_code=409,detail='Character name already exists') from error
+    except ValueError as error:
+        raise HTTPException(status_code=422,detail=str(error)) from error
+    return {'id':character_id,'missing_families':missing}
+
+
+@app.get('/api/catalog/weapons/{weapon_id}')
+def catalog_weapon(weapon_id: int):
+    with sqlite3.connect(DB_PATH) as db:
+        db.row_factory=sqlite3.Row
+        row=db.execute('''SELECT id,name,weapon_type,rarity,ascension_family,
+            common_drop_family,elite_drop_family FROM weapons WHERE id=?''',
+            (weapon_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404,detail='Weapon not found')
+        return dict(row)
+
+
+@app.put('/api/catalog/weapons/{weapon_id}')
+def update_catalog_weapon(weapon_id: int, update: NewWeapon):
+    try:
+        with sqlite3.connect(DB_PATH) as db:
+            db.execute('PRAGMA foreign_keys=ON')
+            db.execute('BEGIN IMMEDIATE')
+            missing=edit_weapon(db,weapon_id,update.model_dump())
+    except LookupError as error:
+        raise HTTPException(status_code=404,detail=str(error)) from error
+    except sqlite3.IntegrityError as error:
+        raise HTTPException(status_code=409,detail='Weapon name already exists') from error
+    except ValueError as error:
+        raise HTTPException(status_code=422,detail=str(error)) from error
+    return {'id':weapon_id,'missing_families':missing}
+
+
+@app.get('/api/catalog/materials')
+def catalog_materials():
+    with sqlite3.connect(DB_PATH) as db:
+        return {'categories':MATERIAL_CATEGORIES,
+                'materials':[{'id':mid,'name':name,'category':category} for mid,name,category
+                in db.execute('SELECT id,name,category FROM materials ORDER BY id')]}
+
+
+@app.put('/api/catalog/materials/{material_id}')
+def update_catalog_material(material_id: int, update: MaterialCatalogUpdate):
+    try:
+        with sqlite3.connect(DB_PATH) as db:
+            db.execute('PRAGMA foreign_keys=ON')
+            db.execute('BEGIN IMMEDIATE')
+            name=edit_material(db,material_id,update.name,update.category)
+    except LookupError as error:
+        raise HTTPException(status_code=404,detail=str(error)) from error
+    except sqlite3.IntegrityError as error:
+        raise HTTPException(status_code=409,detail='Material name already exists') from error
+    except ValueError as error:
+        raise HTTPException(status_code=422,detail=str(error)) from error
+    return {'id':material_id,'name':name,'category':update.category}
+
+
 @app.get('/api/catalog/options')
 def catalog_options():
     fields = {
@@ -83,21 +260,24 @@ def catalog_options():
         result['element_gems'] = dict(db.execute(
             'SELECT element,gem_family FROM element_gems ORDER BY element'))
         result['weapon_types'] = ['Sword','Claymore','Polearm','Catalyst','Bow']
+        saved={role:set() for role in FAMILY_TIERS}
+        for role,family in db.execute('SELECT DISTINCT material_role,family FROM material_family_tiers'):
+            if role in saved:
+                saved[role].add(family)
         common = (set(result['common_families']) |
             {r[0] for r in db.execute('''SELECT DISTINCT common_drop_family FROM weapons
-                WHERE common_drop_family IS NOT NULL''')})
+                WHERE common_drop_family IS NOT NULL''')} | saved['common_drop'])
         weekly = {r[0] for r in db.execute('''SELECT DISTINCT weekly_boss_material
             FROM characters WHERE weekly_boss_material IS NOT NULL''')}
-        weekly.update(r[0] for r in db.execute('''SELECT family FROM material_family_tiers
-            WHERE material_role='weekly_boss_drop' '''))
+        weekly.update(saved['weekly_boss_drop'])
         order = {(role,name):position for role,name,position in db.execute(
             'SELECT material_role,type_name,sort_order FROM material_type_order')}
         def workbook_order(role, values):
             return sorted(values,key=lambda name:(order.get((role,name),100000),name))
         result['common_families'] = workbook_order('common_drop', common)
-        result['elite_families'] = workbook_order('elite_drop', result['elite_families'])
-        result['talent_families'] = workbook_order('talent_book', result['talent_families'])
-        result['ascension_families'] = workbook_order('weapon_ascension', result['ascension_families'])
+        result['elite_families'] = workbook_order('elite_drop', set(result['elite_families'])|saved['elite_drop'])
+        result['talent_families'] = workbook_order('talent_book', set(result['talent_families'])|saved['talent_book'])
+        result['ascension_families'] = workbook_order('weapon_ascension', set(result['ascension_families'])|saved['weapon_ascension'])
         result['weekly_boss_types'] = workbook_order('weekly_boss_drop', weekly)
         return result
 
@@ -151,6 +331,54 @@ def shopping_list_api():
         raise HTTPException(status_code=500, detail=str(error)) from error
 
 
+@app.get('/api/overview')
+def overview_api():
+    try:
+        with sqlite3.connect(DB_PATH) as db:
+            return overview(db)
+    except sqlite3.Error as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+
+
+@app.get('/api/progress')
+def progress_api():
+    try:
+        with sqlite3.connect(DB_PATH) as db:
+            return progress_lists(db)
+    except sqlite3.Error as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+
+
+@app.get('/overview', response_class=HTMLResponse)
+def overview_screen():
+    return overview_page()
+
+
+@app.get('/', response_class=HTMLResponse)
+def home():
+    return overview_page()
+
+
+@app.get('/progress', response_class=HTMLResponse)
+def progress_screen():
+    return progress_page('characters')
+
+
+@app.get('/characters', response_class=HTMLResponse)
+def character_progress_screen():
+    return progress_page('characters')
+
+
+@app.get('/weapons', response_class=HTMLResponse)
+def weapon_progress_screen():
+    return progress_page('weapons')
+
+
+@app.get('/traveller', response_class=HTMLResponse)
+def traveller_progress_screen():
+    return progress_page('traveller')
+
+
 @app.put('/api/inventory')
 def update_inventory(update: InventoryUpdate):
     try:
@@ -171,7 +399,7 @@ def update_inventory(update: InventoryUpdate):
 def list_characters():
     with sqlite3.connect(DB_PATH) as db:
         return [{'id': cid, 'name': name} for cid, name in
-                db.execute('SELECT id,name FROM characters ORDER BY name')]
+                db.execute('SELECT id,name FROM characters ORDER BY id')]
 
 
 @app.get('/api/characters/{character_id}')
@@ -218,11 +446,40 @@ def save_character_goal(character_id: int, update: CharacterGoalUpdate):
     return character_goal(character_id)
 
 
+@app.put('/api/characters/{character_id}/progress')
+def save_character_progress(character_id: int, update: CharacterProgressUpdate):
+    with sqlite3.connect(DB_PATH) as db:
+        row=db.execute('''SELECT current_level,current_ascension,target_level,target_ascension
+            FROM character_progress WHERE character_id=?''',(character_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404,detail='Character not found')
+        old_level,old_asc,target_level,target_asc=row
+        if (update.current_level<old_level or update.current_ascension<old_asc or
+            update.current_level>(20,40,50,60,70,80,90)[update.current_ascension]):
+            raise HTTPException(status_code=422,detail='Current level or ascension is outside the valid range')
+        talents=db.execute('''SELECT talent_slot,current_level,target_level FROM talent_progress
+            WHERE character_id=? ORDER BY talent_slot''',(character_id,)).fetchall()
+        if (len(talents)!=3 or [t[0] for t in talents]!=[1,2,3] or
+            len(update.talent_levels)!=3 or
+            any(type(level) is not int or level<old or level>10
+                for (_,old,_),level in zip(talents,update.talent_levels))):
+            raise HTTPException(status_code=422,detail='Enter three valid current talent levels')
+        db.execute('''UPDATE character_progress SET current_level=?,current_ascension=?,
+            target_level=?,target_ascension=? WHERE character_id=?''',
+            (update.current_level,update.current_ascension,max(target_level,update.current_level),
+             max(target_asc,update.current_ascension),character_id))
+        db.executemany('''UPDATE talent_progress SET current_level=?,target_level=?
+            WHERE character_id=? AND talent_slot=?''',
+            [(level,max(level,target),character_id,slot)
+             for (slot,_,target),level in zip(talents,update.talent_levels)])
+    return character_goal(character_id)
+
+
 @app.get('/api/weapons')
 def list_weapon_catalog():
     with sqlite3.connect(DB_PATH) as db:
         return [{'id': wid, 'name': name, 'rarity': rarity} for wid, name, rarity in
-                db.execute('SELECT id,name,rarity FROM weapons ORDER BY name')]
+                db.execute('SELECT id,name,rarity FROM weapons ORDER BY id')]
 
 
 @app.get('/api/weapon-copies')
@@ -232,7 +489,7 @@ def list_weapon_copies():
                  'name': name, 'label': label} for cid,wid,number,name,label in
                 db.execute('''SELECT wc.id,wc.weapon_id,wc.copy_number,w.name,wc.label
                     FROM weapon_copies wc JOIN weapons w ON w.id=wc.weapon_id
-                    ORDER BY w.name,wc.copy_number''')]
+                    ORDER BY w.id,wc.copy_number''')]
 
 
 @app.get('/api/weapon-copies/{copy_id}')
@@ -265,6 +522,16 @@ def add_weapon_copy(new: NewWeaponCopy):
     return weapon_copy_goal(copy_id)
 
 
+@app.put('/api/weapon-copies/{copy_id}/label')
+def update_weapon_copy_label(copy_id: int, update: WeaponCopyLabelUpdate):
+    label=update.label.strip() if update.label else None
+    with sqlite3.connect(DB_PATH) as db:
+        result=db.execute('UPDATE weapon_copies SET label=? WHERE id=?',(label or None,copy_id))
+        if result.rowcount==0:
+            raise HTTPException(status_code=404,detail='Weapon copy not found')
+    return weapon_copy_goal(copy_id)
+
+
 @app.put('/api/weapon-copies/{copy_id}/goal')
 def save_weapon_goal(copy_id: int, update: WeaponGoalUpdate):
     with sqlite3.connect(DB_PATH) as db:
@@ -285,13 +552,32 @@ def save_weapon_goal(copy_id: int, update: WeaponGoalUpdate):
     return weapon_copy_goal(copy_id)
 
 
+@app.put('/api/weapon-copies/{copy_id}/progress')
+def save_weapon_progress(copy_id: int, update: WeaponProgressUpdate):
+    with sqlite3.connect(DB_PATH) as db:
+        row=db.execute('''SELECT wc.current_level,wc.current_ascension,wc.target_level,
+            wc.target_ascension,w.rarity FROM weapon_copies wc
+            JOIN weapons w ON w.id=wc.weapon_id WHERE wc.id=?''',(copy_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404,detail='Weapon copy not found')
+        old_level,old_asc,target_level,target_asc,rarity=row
+        max_asc=4 if rarity<=2 else 6
+        if (update.current_level<old_level or update.current_ascension<old_asc or
+            update.current_ascension>max_asc or
+            update.current_level>(20,40,50,60,70,80,90)[update.current_ascension]):
+            raise HTTPException(status_code=422,detail='Current weapon level or ascension is outside the valid range')
+        db.execute('''UPDATE weapon_copies SET current_level=?,current_ascension=?,
+            target_level=?,target_ascension=? WHERE id=?''',
+            (update.current_level,update.current_ascension,max(target_level,update.current_level),
+             max(target_asc,update.current_ascension),copy_id))
+    return weapon_copy_goal(copy_id)
+
+
 @app.get('/api/traveller/elements')
 def traveller_elements():
     with sqlite3.connect(DB_PATH) as db:
-        return [r[0] for r in db.execute('''SELECT DISTINCT element FROM traveller_talent_progress
-            ORDER BY CASE element WHEN 'Anemo' THEN 1 WHEN 'Geo' THEN 2
-            WHEN 'Electro' THEN 3 WHEN 'Dendro' THEN 4 WHEN 'Hydro' THEN 5
-            WHEN 'Pyro' THEN 6 WHEN 'Cryo' THEN 7 ELSE 8 END''')]
+        return [r[0] for r in db.execute('''SELECT element FROM traveller_talent_progress
+            GROUP BY element ORDER BY MIN(id)''')]
 
 
 @app.get('/api/traveller/{element}')
@@ -331,6 +617,36 @@ def save_traveller_goal(element: str, update: TravellerGoalUpdate):
         db.executemany('''UPDATE traveller_talent_progress SET target_level=?
             WHERE element=? AND talent_slot=?''',
             [(target,element,slot) for (slot,_),target in zip(talents,update.talent_targets)])
+    return traveller_goal(element)
+
+
+@app.put('/api/traveller/{element}/progress')
+def save_traveller_progress(element: str, update: TravellerProgressUpdate):
+    with sqlite3.connect(DB_PATH) as db:
+        row=db.execute('''SELECT current_level,current_ascension,target_level,target_ascension
+            FROM traveller_progress WHERE id=1''').fetchone()
+        talents=db.execute('''SELECT talent_slot,current_level,target_level
+            FROM traveller_talent_progress WHERE element=? ORDER BY talent_slot''',(element,)).fetchall()
+        if row is None or len(talents)!=3 or [t[0] for t in talents]!=[1,2,3]:
+            raise HTTPException(status_code=404,detail='Traveller element not found')
+        old_level,old_asc,target_level,target_asc=row
+        if (update.current_level<old_level or update.current_ascension<old_asc or
+            update.current_level>(20,40,50,60,70,80,90)[update.current_ascension]):
+            raise HTTPException(status_code=422,detail='Current Traveller level or ascension is outside the valid range')
+        if (len(update.talent_levels)!=3 or
+            any(type(level) is not int or level<old or level>10
+                for (_,old,_),level in zip(talents,update.talent_levels))):
+            raise HTTPException(status_code=422,detail='Enter three valid current talent levels')
+        if element=='Cryo' and any(level>old for (_,old,_),level in zip(talents,update.talent_levels)):
+            raise HTTPException(status_code=422,detail='Cryo material costs are not available yet')
+        db.execute('''UPDATE traveller_progress SET current_level=?,current_ascension=?,
+            target_level=?,target_ascension=? WHERE id=1''',
+            (update.current_level,update.current_ascension,max(target_level,update.current_level),
+             max(target_asc,update.current_ascension)))
+        db.executemany('''UPDATE traveller_talent_progress SET current_level=?,target_level=?
+            WHERE element=? AND talent_slot=?''',
+            [(level,max(level,target),element,slot)
+             for (slot,_,target),level in zip(talents,update.talent_levels)])
     return traveller_goal(element)
 
 
@@ -399,8 +715,17 @@ def save_material_family(update: MaterialFamilyUpdate):
             'family':update.family,'materials':names}
 
 
-@app.get('/', response_class=HTMLResponse)
-def home():
+@app.get('/goals', response_class=HTMLResponse)
+def goals_screen():
+    return main_page('goals')
+
+
+@app.get('/catalog', response_class=HTMLResponse)
+def catalog_screen():
+    return main_page('catalog')
+
+
+def main_page(view):
     return '''<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Genshin Tracker</title>
@@ -428,11 +753,14 @@ def home():
   .catalog-fields .read-only-field { display: flex; align-items: center;
     border: 1px solid #ccc; border-radius: 2px; background: #f8fafc; }
   details { margin: 20px 0; } li { margin: 6px 0; overflow-wrap: anywhere; }
+  body.goals-view .catalog-only, body.catalog-view .goals-only { display: none; }
+  details.summary > summary { font-size: 1.35em; font-weight: bold; cursor: pointer; }
   @media (max-width: 600px) { body { margin: 12px auto; } th,td { padding: 7px 4px; font-size: 13px; } }
-</style></head><body>
+</style></head><body class="''' + view + '''-view">
 <h1>Genshin Tracker</h1>
-<p class="note">Combined material goals, compared once against your inventory.</p>
-<section class="summary"><h2>Character Goal</h2>
+<nav><a href="/">Inventory Overview</a> · <a href="/goals">Goals</a> · <a href="/characters">Characters</a> · <a href="/weapons">Weapons</a> · <a href="/traveller">Traveller</a> · <a href="/catalog">Add data</a></nav>
+<p class="note goals-only">Set targets and record current progress. View all materials on Inventory Overview.</p>
+<details class="summary goals-only" open><summary>Character Goal</summary>
 <label>Character <select id="character-select"></select></label>
 <div class="goal-group">
   <p class="goal-row">Current Level: <span id="character-current-level"></span></p>
@@ -444,8 +772,15 @@ def home():
 </div>
 <div id="talent-inputs"></div>
 <button id="save-character">Save Character Goal</button> <span id="goal-message" role="status"></span>
-</section>
-<section class="summary"><h2>Weapon Goal</h2>
+<details><summary>Record Current Progress</summary>
+<label>Current Level <input id="record-character-level" type="number" min="1" max="90" step="1"></label>
+<label>Current Ascension <input id="record-character-ascension" type="number" min="0" max="6" step="1"></label>
+<div id="record-character-talents"></div>
+<button id="record-character" type="button">Save Current Progress</button>
+<span id="record-character-message" role="status"></span>
+</details>
+</details>
+<details class="summary goals-only"><summary>Weapon Goal</summary>
 <label>Weapon <select id="weapon-copy-select"></select></label>
 <p id="selected-weapon"></p>
 <div class="goal-group">
@@ -457,12 +792,18 @@ def home():
   <div class="goal-row"><label>Target Ascension: <input id="weapon-ascension" type="number" min="0" max="6" step="1"></label></div>
 </div>
 <button id="save-weapon">Save Weapon Goal</button> <span id="weapon-message" role="status"></span>
+<details><summary>Record Current Progress</summary>
+<label>Current Level <input id="record-weapon-level" type="number" min="1" max="90" step="1"></label>
+<label>Current Ascension <input id="record-weapon-ascension" type="number" min="0" max="6" step="1"></label>
+<button id="record-weapon" type="button">Save Current Progress</button>
+<span id="record-weapon-message" role="status"></span>
+</details>
 <h3>Add Another Copy</h3>
 <label>Weapon <select id="weapon-catalog"></select></label>
 <label>Label (Optional) <input id="copy-label" type="text" maxlength="80" placeholder="e.g. second copy"></label>
 <button id="add-weapon-copy">Add Copy</button> <span id="add-copy-message" role="status"></span>
-</section>
-<section class="summary"><h2>Traveller Goal</h2>
+</details>
+<details class="summary goals-only"><summary>Traveller Goal</summary>
 <label>Element <select id="traveller-element"></select></label>
 <div class="goal-group">
   <p class="goal-row">Current Level: <span id="traveller-current-level"></span></p>
@@ -474,24 +815,26 @@ def home():
 </div>
 <div id="traveller-talents"></div>
 <button id="save-traveller">Save Traveller Goal</button> <span id="traveller-message" role="status"></span>
+<details><summary>Record Current Progress</summary>
+<label>Current Level <input id="record-traveller-level" type="number" min="1" max="90" step="1"></label>
+<label>Current Ascension <input id="record-traveller-ascension" type="number" min="0" max="6" step="1"></label>
+<div id="record-traveller-talents"></div>
+<button id="record-traveller" type="button">Save Current Progress</button>
+<span id="record-traveller-message" role="status"></span>
+</details>
 <p class="note">Traveller level and ascension are shared across elements. Cryo talent costs are not available yet.</p>
-</section>
-<section class="summary"><h2>Missing Material Types</h2>
-<p class="note">Enter exact material names from lowest to highest tier. Saving links the type to every listed character and weapon.</p>
-<div id="missing-families"></div>
-<p id="family-message" role="status"></p>
-</section>
-<section class="summary"><h2>Add to Catalog</h2>
+</details>
+<section class="summary catalog-only"><h2>Add New</h2>
 <p class="note">New entries start at level 1, ascension 0, and talent level 1. Existing material types are reused. If a type is new, complete it in Missing Material Types after saving.</p>
 <details><summary>New Character</summary>
 <div class="catalog-fields">
   <label>Name <input id="new-character-name" type="text"></label>
   <label>Element <select id="new-character-element"></select></label>
   <div class="catalog-value">Gem Type <span id="new-character-gem" class="read-only-field"></span></div>
-  <label>Boss Material Name <input id="new-character-boss" type="text"></label>
-  <label>Common Drop Type <select id="new-character-common" data-new-id="new-character-common-custom"></select>
-    <input id="new-character-common-custom" type="text" placeholder="New Common Drop Type" hidden></label>
-  <label>Local Specialty Name <input id="new-character-local" type="text"></label>
+  <label>World Boss Material <input id="new-character-boss" type="text"></label>
+  <label>Common Enemy Drop Type <select id="new-character-common" data-new-id="new-character-common-custom"></select>
+    <input id="new-character-common-custom" type="text" placeholder="New Common Enemy Drop Type" hidden></label>
+  <label>Local Speciality <input id="new-character-local" type="text"></label>
   <label>Talent Book Type <select id="new-character-talent" data-new-id="new-character-talent-custom"></select>
     <input id="new-character-talent-custom" type="text" placeholder="New Talent Book Type" hidden></label>
   <label>Weekly Boss Type <select id="new-character-weekly" data-new-id="new-character-weekly-custom"></select>
@@ -506,21 +849,98 @@ def home():
   <label>Rarity <input id="new-weapon-rarity" type="number" min="1" max="5" step="1"></label>
   <label>Ascension Material Type <select id="new-weapon-ascension" data-new-id="new-weapon-ascension-custom"></select>
     <input id="new-weapon-ascension-custom" type="text" placeholder="New Ascension Material Type" hidden></label>
-  <label>Common Drop Type <select id="new-weapon-common" data-new-id="new-weapon-common-custom"></select>
-    <input id="new-weapon-common-custom" type="text" placeholder="New Common Drop Type" hidden></label>
-  <label>Elite Drop Type <select id="new-weapon-elite" data-new-id="new-weapon-elite-custom"></select>
-    <input id="new-weapon-elite-custom" type="text" placeholder="New Elite Drop Type" hidden></label>
+  <label>Common Enemy Drop Type <select id="new-weapon-common" data-new-id="new-weapon-common-custom"></select>
+    <input id="new-weapon-common-custom" type="text" placeholder="New Common Enemy Drop Type" hidden></label>
+  <label>Elite Enemy Drop Type <select id="new-weapon-elite" data-new-id="new-weapon-elite-custom"></select>
+    <input id="new-weapon-elite-custom" type="text" placeholder="New Elite Enemy Drop Type" hidden></label>
 </div>
 <button id="create-weapon" type="button">Add Weapon</button> <span id="create-weapon-message" role="status"></span>
 </details>
+<details><summary>New Material</summary>
+<p class="note">Choose the bucket, enter a type name, then name each material from lowest to highest tier. The new type will be available for characters and weapons.</p>
+<label>Material Type <select id="new-type-bucket">
+  <option value="">Select a Type</option>
+  <option value="talent_book">Talent Material</option>
+  <option value="weapon_ascension">Weapon Ascension Material</option>
+  <option value="common_drop">Common Enemy Drop</option>
+  <option value="elite_drop">Elite Enemy Drop</option>
+  <option value="weekly_boss_drop">Weekly Boss Drop</option>
+  <option value="character_boss_drop">World Boss Drop</option>
+  <option value="local_specialty">Local Speciality</option>
+</select></label>
+<label>Type Name <input id="new-type-name" type="text"></label>
+<div id="new-type-tiers"></div>
+<button id="create-material-type" type="button">Add Material Type</button>
+<span id="new-type-message" role="status"></span>
+</details>
 </section>
-<section class="summary" id="summary">Loading shopping list…</section>
-<p id="save-message" role="status"></p>
-<table><thead><tr><th>Material</th><th>Required</th><th>Owned</th><th>Still Needed</th><th>Update Value</th><th>Action</th></tr></thead>
+<section class="summary catalog-only"><h2>Edit Existing Data</h2>
+<p class="note">Select an entry, correct its fields, then save. Editing a material name keeps its inventory and cost links. New material types appear under Missing Material Types.</p>
+<details><summary>Edit Character</summary>
+<label>Character <select id="edit-character-select"></select></label>
+<div class="catalog-fields">
+  <label>Name <input id="edit-character-name" type="text"></label>
+  <label>Element <select id="edit-character-element"></select></label>
+  <div class="catalog-value">Gem Type <span id="edit-character-gem" class="read-only-field"></span></div>
+  <label>World Boss Material <input id="edit-character-boss" type="text"></label>
+  <label>Common Enemy Drop Type <input id="edit-character-common" type="text"></label>
+  <label>Local Speciality <input id="edit-character-local" type="text"></label>
+  <label>Talent Book Type <input id="edit-character-talent" type="text"></label>
+  <label>Weekly Boss Type <input id="edit-character-weekly" type="text"></label>
+</div>
+<button id="update-character" type="button">Save Character Data</button> <span id="edit-character-message" role="status"></span>
+</details>
+<details><summary>Edit Weapon</summary>
+<label>Weapon <select id="edit-weapon-select"></select></label>
+<div class="catalog-fields">
+  <label>Name <input id="edit-weapon-name" type="text"></label>
+  <label>Type <select id="edit-weapon-type"></select></label>
+  <label>Rarity <input id="edit-weapon-rarity" type="number" min="1" max="5" step="1"></label>
+  <label>Ascension Material Type <input id="edit-weapon-ascension" type="text"></label>
+  <label>Common Enemy Drop Type <input id="edit-weapon-common" type="text"></label>
+  <label>Elite Enemy Drop Type <input id="edit-weapon-elite" type="text"></label>
+</div>
+<button id="update-weapon" type="button">Save Weapon Data</button> <span id="edit-weapon-message" role="status"></span>
+</details>
+<details><summary>Edit Weapon Copy Label</summary>
+<label>Weapon Copy <select id="edit-copy-select"></select></label>
+<label>Label (Optional) <input id="edit-copy-label" type="text" maxlength="80"></label>
+<button id="update-copy" type="button">Save Copy Label</button> <span id="edit-copy-message" role="status"></span>
+</details>
+<details id="edit-traveller-section"><summary>Edit Traveller</summary>
+<p class="note">These are progress-list labels. Talent costs are stored separately and are not changed here.</p>
+<label>Element <select id="edit-traveller-element"></select></label>
+<label>Talent <select id="edit-traveller-slot"><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label>
+<div class="catalog-fields">
+  <label>Common Enemy Drop Type <input id="edit-traveller-common" type="text"></label>
+  <label>Talent Material Type <input id="edit-traveller-talent" type="text"></label>
+  <label>Weekly Boss Type <input id="edit-traveller-weekly" type="text"></label>
+</div>
+<button id="update-traveller" type="button">Save Traveller Data</button> <span id="edit-traveller-message" role="status"></span>
+</details>
+<details><summary>Edit Material</summary>
+<label>Find Material Type <input id="edit-material-search" type="search" placeholder="Filter by type name"></label>
+<label>Material Type <select id="edit-material-select"></select></label>
+<div class="catalog-fields">
+  <label>Type Name <input id="edit-material-name" type="text"></label>
+  <label>Category <select id="edit-material-category"></select></label>
+</div>
+<div id="edit-material-tiers"></div>
+<button id="update-material" type="button">Save Material Data</button> <span id="edit-material-message" role="status"></span>
+</details>
+</section>
+<section class="summary catalog-only"><h2>Missing Material Types</h2>
+<p class="note">Enter exact material names from lowest to highest tier. Saving links the type to every listed character and weapon.</p>
+<div id="missing-families"></div>
+<p id="family-message" role="status"></p>
+</section>
+<section class="summary goals-only" id="summary">Loading goal summary…</section>
+<p id="save-message" role="status" class="goals-only"></p>
+<table class="goals-only" hidden><thead><tr><th>Material</th><th>Required</th><th>Owned</th><th>Still Needed</th><th>Update Value</th><th>Action</th></tr></thead>
 <tbody id="materials"></tbody></table>
-<details id="excluded-section"><summary id="excluded-title">Excluded goals</summary>
+<details class="goals-only" id="excluded-section"><summary id="excluded-title">Excluded goals</summary>
 <ul id="excluded"></ul></details>
-<p class="note">EXP is shown as points. Using EXP items may overshoot and increase the Mora cost.</p>
+<p class="note goals-only">EXP is shown as points. Using EXP items may overshoot and increase the Mora cost.</p>
 <script>
   const number = new Intl.NumberFormat();
   async function loadCharacters(selectedId) {
@@ -529,22 +949,50 @@ def home():
     const characters = await response.json();
     const select = document.getElementById('character-select');
     select.replaceChildren();
+    select.add(new Option('Select a character', ''));
     for (const character of characters) {
       const option = document.createElement('option');
       option.value = character.id; option.textContent = character.name;
       select.append(option);
     }
-    if (selectedId) select.value = String(selectedId);
+    select.value = selectedId ? String(selectedId) : '';
     select.onchange = loadCharacterGoal;
-    if (characters.length) await loadCharacterGoal();
+    if (select.value) await loadCharacterGoal();
+  }
+  function fillCurrentTalents(containerId, className, talents, cryo=false) {
+    const container = document.getElementById(containerId);
+    container.replaceChildren();
+    for (const talent of talents) {
+      const label = document.createElement('label');
+      label.textContent = `Talent ${talent.talent_slot} Current Level `;
+      const input = document.createElement('input');
+      input.type = 'number'; input.step = '1'; input.min = talent.current_level;
+      input.max = cryo ? talent.current_level : 10;
+      input.value = talent.current_level; input.className = className;
+      label.append(input); container.append(label);
+    }
   }
   async function loadCharacterGoal() {
     const id = document.getElementById('character-select').value;
+    if (!id) {
+      for (const key of ['character-current-level','character-current-ascension'])
+        document.getElementById(key).textContent = '';
+      for (const key of ['character-level','character-ascension','record-character-level','record-character-ascension'])
+        document.getElementById(key).value = '';
+      for (const key of ['talent-inputs','record-character-talents'])
+        document.getElementById(key).replaceChildren();
+      return;
+    }
     const response = await fetch('/api/characters/' + id);
     if (!response.ok) throw new Error('Could not load character goal.');
     const goal = await response.json();
     document.getElementById('character-current-level').textContent = goal.current_level;
     document.getElementById('character-current-ascension').textContent = goal.current_ascension;
+    const currentLevel = document.getElementById('record-character-level');
+    currentLevel.min = goal.current_level; currentLevel.value = goal.current_level;
+    const currentAsc = document.getElementById('record-character-ascension');
+    currentAsc.min = goal.current_ascension; currentAsc.value = goal.current_ascension;
+    fillCurrentTalents('record-character-talents','record-character-talent',goal.talents);
     const level = document.getElementById('character-level');
     level.min = goal.current_level; level.value = goal.target_level;
     const asc = document.getElementById('character-ascension');
@@ -569,6 +1017,7 @@ def home():
       targetRow.append(label); group.append(targetRow); container.append(group);
     }
     document.getElementById('goal-message').textContent = '';
+    document.getElementById('record-character-message').textContent = '';
   }
   async function saveCharacterGoal() {
     const message = document.getElementById('goal-message');
@@ -597,12 +1046,29 @@ def home():
     await load();
   }
   document.getElementById('save-character').addEventListener('click', saveCharacterGoal);
+  async function recordCharacterProgress() {
+    const message = document.getElementById('record-character-message');
+    const level = document.getElementById('record-character-level');
+    const asc = document.getElementById('record-character-ascension');
+    const talents = [...document.querySelectorAll('.record-character-talent')];
+    if (!validCurrentFields([level,asc,...talents],5,message)) return;
+    const response = await fetch('/api/characters/' + document.getElementById('character-select').value + '/progress', {
+      method:'PUT', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({current_level:Number(level.value),current_ascension:Number(asc.value),
+        talent_levels:talents.map(input=>Number(input.value))})
+    });
+    if (!response.ok) { message.textContent = 'Could not save current progress (HTTP '+response.status+').'; return; }
+    await loadCharacterGoal(); await load();
+    message.textContent = 'Current progress saved.';
+  }
+  document.getElementById('record-character').addEventListener('click', recordCharacterProgress);
   async function loadWeaponCopies(selectedId) {
     const response = await fetch('/api/weapon-copies');
     if (!response.ok) throw new Error('Could not load weapon copies.');
     const copies = await response.json();
     const select = document.getElementById('weapon-copy-select');
     select.replaceChildren();
+    select.add(new Option('Select a weapon', ''));
     for (const copy of copies) {
       const option = document.createElement('option');
       option.value = copy.id;
@@ -610,17 +1076,30 @@ def home():
         `${copy.name} — ${copy.label || 'Copy ' + copy.copy_number}`;
       select.append(option);
     }
-    if (selectedId) select.value = String(selectedId);
-    if (copies.length) await loadWeaponGoal();
+    select.value = selectedId ? String(selectedId) : '';
+    if (select.value) await loadWeaponGoal();
   }
   async function loadWeaponGoal() {
     const id = document.getElementById('weapon-copy-select').value;
+    if (!id) {
+      for (const key of ['selected-weapon','weapon-current-level','weapon-current-ascension'])
+        document.getElementById(key).textContent = '';
+      for (const key of ['weapon-level','weapon-ascension','record-weapon-level','record-weapon-ascension'])
+        document.getElementById(key).value = '';
+      return;
+    }
     const response = await fetch('/api/weapon-copies/' + id);
     if (!response.ok) throw new Error('Could not load weapon copy.');
     const goal = await response.json();
     document.getElementById('selected-weapon').textContent = `${goal.name} (${goal.rarity}-star)`;
     document.getElementById('weapon-current-level').textContent = goal.current_level;
     document.getElementById('weapon-current-ascension').textContent = goal.current_ascension;
+    const currentLevel = document.getElementById('record-weapon-level');
+    currentLevel.min = goal.current_level; currentLevel.max = goal.rarity <= 2 ? 70 : 90;
+    currentLevel.value = goal.current_level;
+    const currentAsc = document.getElementById('record-weapon-ascension');
+    currentAsc.min = goal.current_ascension; currentAsc.max = goal.rarity <= 2 ? 4 : 6;
+    currentAsc.value = goal.current_ascension;
     const level = document.getElementById('weapon-level');
     level.value = goal.target_level; level.min = goal.current_level;
     level.max = goal.rarity <= 2 ? 70 : 90;
@@ -628,6 +1107,7 @@ def home():
     asc.value = goal.target_ascension; asc.min = goal.current_ascension;
     asc.max = goal.rarity <= 2 ? 4 : 6;
     document.getElementById('weapon-message').textContent = '';
+    document.getElementById('record-weapon-message').textContent = '';
   }
   async function loadWeaponCatalog() {
     const response = await fetch('/api/weapons');
@@ -635,6 +1115,7 @@ def home():
     const weapons = await response.json();
     const select = document.getElementById('weapon-catalog');
     select.replaceChildren();
+    select.add(new Option('Select a weapon', ''));
     for (const weapon of weapons) {
       const option = document.createElement('option');
       option.value = weapon.id; option.textContent = `${weapon.name} (${weapon.rarity}-star)`;
@@ -663,7 +1144,9 @@ def home():
   }
   async function addWeaponCopy() {
     const message = document.getElementById('add-copy-message');
-    const weapon_id = Number(document.getElementById('weapon-catalog').value);
+    const chosen = document.getElementById('weapon-catalog').value;
+    if (!chosen) { message.textContent = 'Select a weapon first.'; return; }
+    const weapon_id = Number(chosen);
     const label = document.getElementById('copy-label').value.trim();
     const response = await fetch('/api/weapon-copies', {
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -678,6 +1161,20 @@ def home():
   }
   document.getElementById('weapon-copy-select').addEventListener('change', loadWeaponGoal);
   document.getElementById('save-weapon').addEventListener('click', saveWeaponGoal);
+  async function recordWeaponProgress() {
+    const message = document.getElementById('record-weapon-message');
+    const level = document.getElementById('record-weapon-level');
+    const asc = document.getElementById('record-weapon-ascension');
+    if (!validCurrentFields([level,asc],2,message)) return;
+    const response = await fetch('/api/weapon-copies/' + document.getElementById('weapon-copy-select').value + '/progress', {
+      method:'PUT',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({current_level:Number(level.value),current_ascension:Number(asc.value)})
+    });
+    if (!response.ok) { message.textContent = 'Could not save current progress (HTTP '+response.status+').'; return; }
+    await loadWeaponGoal(); await load();
+    message.textContent = 'Current progress saved.';
+  }
+  document.getElementById('record-weapon').addEventListener('click', recordWeaponProgress);
   document.getElementById('add-weapon-copy').addEventListener('click', addWeaponCopy);
   async function loadTravellerElements() {
     const response = await fetch('/api/traveller/elements');
@@ -685,19 +1182,35 @@ def home():
     const elements = await response.json();
     const select = document.getElementById('traveller-element');
     select.replaceChildren();
+    select.add(new Option('Select an element', ''));
     for (const element of elements) {
       const option = document.createElement('option');
       option.value = element; option.textContent = element; select.append(option);
     }
-    if (elements.length) await loadTravellerGoal();
+    select.value = '';
   }
   async function loadTravellerGoal() {
     const element = document.getElementById('traveller-element').value;
+    if (!element) {
+      for (const key of ['traveller-current-level','traveller-current-ascension'])
+        document.getElementById(key).textContent = '';
+      for (const key of ['traveller-level','traveller-ascension','record-traveller-level','record-traveller-ascension'])
+        document.getElementById(key).value = '';
+      for (const key of ['traveller-talents','record-traveller-talents'])
+        document.getElementById(key).replaceChildren();
+      return;
+    }
     const response = await fetch('/api/traveller/' + encodeURIComponent(element));
     if (!response.ok) throw new Error('Could not load Traveller goal.');
     const goal = await response.json();
     document.getElementById('traveller-current-level').textContent = goal.current_level;
     document.getElementById('traveller-current-ascension').textContent = goal.current_ascension;
+    const currentLevel = document.getElementById('record-traveller-level');
+    currentLevel.min = goal.current_level; currentLevel.value = goal.current_level;
+    const currentAsc = document.getElementById('record-traveller-ascension');
+    currentAsc.min = goal.current_ascension; currentAsc.value = goal.current_ascension;
+    fillCurrentTalents('record-traveller-talents','record-traveller-talent',goal.talents,
+      element === 'Cryo');
     const level = document.getElementById('traveller-level');
     level.min = goal.current_level; level.value = goal.target_level;
     const asc = document.getElementById('traveller-ascension');
@@ -719,6 +1232,7 @@ def home():
       targetRow.append(label); group.append(current, targetRow); container.append(group);
     }
     document.getElementById('traveller-message').textContent = '';
+    document.getElementById('record-traveller-message').textContent = '';
   }
   async function saveTravellerGoal() {
     const message = document.getElementById('traveller-message');
@@ -746,6 +1260,35 @@ def home():
   }
   document.getElementById('traveller-element').addEventListener('change', loadTravellerGoal);
   document.getElementById('save-traveller').addEventListener('click', saveTravellerGoal);
+  async function recordTravellerProgress() {
+    const message = document.getElementById('record-traveller-message');
+    const level = document.getElementById('record-traveller-level');
+    const asc = document.getElementById('record-traveller-ascension');
+    const talents = [...document.querySelectorAll('.record-traveller-talent')];
+    if (!validCurrentFields([level,asc,...talents],5,message)) return;
+    const element = document.getElementById('traveller-element').value;
+    const response = await fetch('/api/traveller/' + encodeURIComponent(element) + '/progress', {
+      method:'PUT',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({current_level:Number(level.value),current_ascension:Number(asc.value),
+        talent_levels:talents.map(input=>Number(input.value))})
+    });
+    if (!response.ok) { message.textContent = 'Could not save current progress (HTTP '+response.status+').'; return; }
+    await loadTravellerGoal(); await load();
+    message.textContent = 'Current progress saved.';
+  }
+  document.getElementById('record-traveller').addEventListener('click', recordTravellerProgress);
+  function validCurrentFields(inputs, expected, message) {
+    if (inputs.length!==expected || inputs.some(input => !input.value.trim() ||
+        !Number.isSafeInteger(Number(input.value)) || Number(input.value)<Number(input.min) ||
+        Number(input.value)>Number(input.max))) {
+      message.textContent = 'Enter valid current levels and ascension.'; return false;
+    }
+    const level = Number(inputs[0].value), asc = Number(inputs[1].value);
+    if (level>[20,40,50,60,70,80,90][asc]) {
+      message.textContent = 'Increase current ascension to support that level.'; return false;
+    }
+    return true;
+  }
   async function loadMissingFamilies() {
     const response = await fetch('/api/missing-families');
     if (!response.ok) throw new Error('Could not load missing material types.');
@@ -794,6 +1337,45 @@ def home():
       panel.append(button); container.append(panel);
     }
   }
+  const newTypeTiers={talent_book:[2,3,4],weapon_ascension:[2,3,4,5],
+    common_drop:[1,2,3],elite_drop:[2,3,4],weekly_boss_drop:[0],
+    character_boss_drop:[0],local_specialty:[0]};
+  function showNewTypeTiers(){
+    const bucket=document.getElementById('new-type-bucket').value;
+    const container=document.getElementById('new-type-tiers');container.replaceChildren();
+    for(const tier of newTypeTiers[bucket]||[]){
+      if(bucket==='character_boss_drop'||bucket==='local_specialty')continue;
+      const label=document.createElement('label');
+      label.textContent=bucket==='weekly_boss_drop'?'Material Name: ':'Tier '+tier+' Material: ';
+      const input=document.createElement('input');input.type='text';input.className='new-type-material';
+      label.append(input);container.append(label);
+    }
+  }
+  document.getElementById('new-type-bucket').addEventListener('change',showNewTypeTiers);
+  document.getElementById('create-material-type').addEventListener('click',async()=>{
+    const material_role=document.getElementById('new-type-bucket').value;
+    const family=document.getElementById('new-type-name').value.trim();
+    const material_names=['character_boss_drop','local_specialty'].includes(material_role)?
+      [family]:[...document.querySelectorAll('.new-type-material')].map(input=>input.value.trim());
+    const message=document.getElementById('new-type-message');
+    if(!material_role||!family||material_names.length!==newTypeTiers[material_role]?.length||
+       material_names.some(name=>!name)||new Set(material_names).size!==material_names.length){
+      message.textContent='Select a bucket and enter a type and distinct material names.';return;
+    }
+    const button=document.getElementById('create-material-type');button.disabled=true;
+    try{
+      const response=await fetch('/api/material-types',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({material_role,family,material_names})});
+      if(!response.ok){const error=await response.json();throw new Error(
+        typeof error.detail==='string'?error.detail:'Could not add material type.');}
+      const saved=await response.json();
+      message.textContent=family+' added.'+(saved.updated_records?
+        ' Linked '+saved.updated_records+' existing entries.':'');
+      document.getElementById('new-type-name').value='';showNewTypeTiers();
+      await loadCatalogOptions();await loadMissingFamilies();await load();
+    }catch(error){message.textContent=error.message;}finally{button.disabled=false;}
+  });
   async function loadCatalogOptions() {
     const response = await fetch('/api/catalog/options');
     if (!response.ok) throw new Error('Could not load catalog suggestions.');
@@ -903,6 +1485,242 @@ def home():
       ascension_family:'new-weapon-ascension',common_drop_family:'new-weapon-common',
       elite_drop_family:'new-weapon-elite'
     }, 'create-weapon-message'));
+  let editMaterials=[];
+  let editCopies=[];
+  async function loadEditTraveller(){
+    const element=document.getElementById('edit-traveller-element').value;
+    const slot=document.getElementById('edit-traveller-slot').value;
+    if(!element)return;
+    const response=await fetch('/api/catalog/traveller/'+encodeURIComponent(element)+'/'+slot);
+    if(!response.ok)throw new Error('Could not load Traveller data.');
+    const data=await response.json();
+    for(const [key,value] of Object.entries({common:data.common_drop_family,
+      talent:data.talent_material_type,weekly:data.weekly_boss_type}))
+      document.getElementById('edit-traveller-'+key).value=value||'';
+  }
+  async function setupEditTraveller(element,slot){
+    const response=await fetch('/api/traveller/elements');
+    if(!response.ok)throw new Error('Could not load Traveller elements.');
+    const select=document.getElementById('edit-traveller-element');select.replaceChildren();
+    for(const value of await response.json())select.add(new Option(value,value));
+    if(element && [...select.options].some(option=>option.value===element))select.value=element;
+    if(['1','2','3'].includes(slot))document.getElementById('edit-traveller-slot').value=slot;
+    await loadEditTraveller();
+    if(element)document.getElementById('edit-traveller-section').open=true;
+  }
+  for(const id of ['edit-traveller-element','edit-traveller-slot'])
+    document.getElementById(id).addEventListener('change',()=>loadEditTraveller().catch(error=>
+      document.getElementById('edit-traveller-message').textContent=error.message));
+  document.getElementById('update-traveller').addEventListener('click',async()=>{
+    const element=document.getElementById('edit-traveller-element').value;
+    const slot=document.getElementById('edit-traveller-slot').value;
+    const message=document.getElementById('edit-traveller-message');
+    const data={common_drop_family:document.getElementById('edit-traveller-common').value.trim(),
+      talent_material_type:document.getElementById('edit-traveller-talent').value.trim(),
+      weekly_boss_type:document.getElementById('edit-traveller-weekly').value.trim()};
+    if(!element){message.textContent='Select an element first.';return;}
+    const button=document.getElementById('update-traveller');button.disabled=true;
+    try{
+      const response=await fetch('/api/catalog/traveller/'+encodeURIComponent(element)+'/'+slot,{
+        method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+      if(!response.ok)throw new Error('Could not save Traveller data (HTTP '+response.status+').');
+      message.textContent='Traveller data saved.';
+    }catch(error){message.textContent=error.message;}finally{button.disabled=false;}
+  });
+  function selectEntries(id, entries, chosen, label) {
+    const select=document.getElementById(id);select.replaceChildren();
+    select.add(new Option('Select '+label,''));
+    for(const entry of entries)select.add(new Option(entry.name,entry.id));
+    select.value=chosen ? String(chosen) : '';
+  }
+  function materialCategoryLabel(value){
+    if(value==='character_boss_drop')return 'World Boss Drop';
+    if(value==='talent_special')return 'Crown of Insight';
+    if(value==='common_drop')return 'Common Enemy Drop';
+    if(value==='elite_drop')return 'Elite Enemy Drop';
+    return value.split('_').map(word=>word[0].toUpperCase()+word.slice(1)).join(' ');
+  }
+  async function loadEditCatalog(characterId,weaponId,materialId,copyId) {
+    const [charactersResponse,weaponsResponse,materialsResponse,optionsResponse,copiesResponse,typesResponse]=await Promise.all([
+      fetch('/api/characters'),fetch('/api/weapons'),fetch('/api/catalog/materials'),
+      fetch('/api/catalog/options'),fetch('/api/weapon-copies'),fetch('/api/catalog/material-types')]);
+    if([charactersResponse,weaponsResponse,materialsResponse,optionsResponse,copiesResponse,typesResponse].some(r=>!r.ok))
+      throw new Error('Could not load catalog entries.');
+    const [characters,weapons,materialData,options,copies,types]=await Promise.all([
+      charactersResponse.json(),weaponsResponse.json(),materialsResponse.json(),
+      optionsResponse.json(),copiesResponse.json(),typesResponse.json()]);
+    selectEntries('edit-character-select',characters,characterId,'a character');
+    selectEntries('edit-weapon-select',weapons,weaponId,'a weapon');
+    editCopies=copies;
+    selectEntries('edit-copy-select',copies.map(copy=>({id:copy.id,
+      name:copy.name+' #'+copy.copy_number+(copy.label?' · '+copy.label:'')})),
+      copyId,'a weapon copy');
+    editMaterials=types;
+    const category=document.getElementById('edit-material-category');category.replaceChildren();
+    for(const value of materialData.categories){
+      category.add(new Option(materialCategoryLabel(value),value));
+    }
+    for(const [id,values] of [['edit-character-element',Object.keys(options.element_gems)],
+                                ['edit-weapon-type',options.weapon_types]]){
+      const select=document.getElementById(id);select.replaceChildren();
+      select.add(new Option('',''));
+      for(const value of values)select.add(new Option(value,value));
+    }
+    document.getElementById('edit-character-element').onchange=()=>{
+      const element=document.getElementById('edit-character-element').value;
+      document.getElementById('edit-character-gem').textContent=options.element_gems[element]||'';
+    };
+    const chosenType=materialId ? types.find(type=>type.materials.some(item=>String(item.id)===String(materialId)))?.key : null;
+    filterEditMaterials(chosenType);
+    if(characterId)await loadEditCharacter();
+    if(weaponId)await loadEditWeapon();
+    if(copyId)showEditCopy();
+    for(const [kind,id] of [['character',characterId],['weapon',weaponId],
+                             ['material',chosenType],['copy',copyId]])
+      if(id)document.getElementById('edit-'+kind+'-select').closest('details').open=true;
+  }
+  function showEditCopy(){
+    const id=Number(document.getElementById('edit-copy-select').value);
+    const copy=editCopies.find(entry=>entry.id===id);
+    document.getElementById('edit-copy-label').value=copy?.label||'';
+  }
+  function filterEditMaterials(chosen) {
+    const filter=document.getElementById('edit-material-search').value.trim().toLocaleLowerCase();
+    const select=document.getElementById('edit-material-select');
+    const previous=chosen||select.value;
+    select.replaceChildren();select.add(new Option('Select a material type',''));
+    for(const material of editMaterials.filter(m=>m.name.toLocaleLowerCase().includes(filter)))
+      select.add(new Option(material.name+' ('+materialCategoryLabel(material.category)+')',material.key));
+    select.value=previous ? String(previous) : '';
+    showEditMaterial();
+  }
+  function showEditMaterial() {
+    const id=document.getElementById('edit-material-select').value;
+    const item=editMaterials.find(material=>material.key===id);
+    document.getElementById('edit-material-name').value=item?.name||'';
+    document.getElementById('edit-material-category').value=item?.category||'';
+    const container=document.getElementById('edit-material-tiers');container.replaceChildren();
+    for(const part of item?.materials||[]){
+      const label=document.createElement('label');
+      label.textContent=(item.materials.length===1?'Material':'Tier '+part.tier+' Material')+': ';
+      const input=document.createElement('input');input.type='text';input.value=part.name;
+      input.dataset.id=part.id;input.className='edit-material-tier';label.append(input);container.append(label);
+    }
+    if(item?.key.startsWith('material|')){
+      const typeInput=document.getElementById('edit-material-name');
+      const materialInput=container.querySelector('input');
+      typeInput.oninput=()=>{materialInput.value=typeInput.value;};
+      materialInput.oninput=()=>{typeInput.value=materialInput.value;};
+    }else document.getElementById('edit-material-name').oninput=null;
+  }
+  async function loadEditCharacter() {
+    const id=document.getElementById('edit-character-select').value;
+    if(!id){
+      for(const key of ['name','element','boss','common','local','talent','weekly'])
+        document.getElementById('edit-character-'+key).value='';
+      document.getElementById('edit-character-gem').textContent='';return;
+    }
+    const response=await fetch('/api/catalog/characters/'+id);
+    if(!response.ok)throw new Error('Could not load character data.');
+    const c=await response.json();
+    for(const [key,value] of Object.entries({name:c.name,element:c.element,
+      boss:c.boss_material,common:c.common_drop_family,local:c.local_specialty,
+      talent:c.talent_book_family,weekly:c.weekly_boss_type}))
+      document.getElementById('edit-character-'+key).value=value||'';
+    document.getElementById('edit-character-gem').textContent=c.gem_family;
+  }
+  async function loadEditWeapon() {
+    const id=document.getElementById('edit-weapon-select').value;
+    if(!id){
+      for(const key of ['name','type','rarity','ascension','common','elite'])
+        document.getElementById('edit-weapon-'+key).value='';
+      return;
+    }
+    const response=await fetch('/api/catalog/weapons/'+id);
+    if(!response.ok)throw new Error('Could not load weapon data.');
+    const w=await response.json();
+    for(const [key,value] of Object.entries({name:w.name,type:w.weapon_type,rarity:w.rarity,
+      ascension:w.ascension_family,common:w.common_drop_family,elite:w.elite_drop_family}))
+      document.getElementById('edit-weapon-'+key).value=value??'';
+  }
+  async function saveEdit(kind) {
+    const id=document.getElementById('edit-'+kind+'-select').value;
+    const message=document.getElementById('edit-'+kind+'-message');
+    if(!id){message.textContent='Select an entry first.';return;}
+    const fields=kind==='character' ? {
+      name:'name',element:'element',boss_material:'boss',common_drop_family:'common',
+      local_specialty:'local',talent_book_family:'talent',weekly_boss_type:'weekly'} :
+      {name:'name',weapon_type:'type',rarity:'rarity',
+        ascension_family:'ascension',common_drop_family:'common',elite_drop_family:'elite'};
+    const data={};
+    for(const [key,suffix] of Object.entries(fields)){
+      const value=document.getElementById('edit-'+kind+'-'+suffix).value.trim();
+      if(!value){message.textContent='Fill in every field.';return;}
+      data[key]=key==='rarity'?Number(value):value;
+    }
+    const button=document.getElementById('update-'+kind);button.disabled=true;
+    try{
+      const collection=kind==='weapon'?'weapons':'characters';
+      const response=await fetch('/api/catalog/'+collection+'/'+id,{
+        method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+      if(!response.ok){const error=await response.json();throw new Error(
+        typeof error.detail==='string'?error.detail:'Could not save data (HTTP '+response.status+').');}
+      const saved=await response.json();
+      message.textContent='Saved.'+(saved.missing_families?.length?
+        ' Complete missing types: '+saved.missing_families.join(', '):'');
+      await loadEditCatalog(kind==='character'?id:null,kind==='weapon'?id:null);
+      await loadCatalogOptions();await loadMissingFamilies();await load();
+      if(kind==='character')await loadCharacters();
+      if(kind==='weapon'){await loadWeaponCatalog();await loadWeaponCopies();}
+    }catch(error){message.textContent=error.message;}finally{button.disabled=false;}
+  }
+  async function saveMaterialType(){
+    const key=document.getElementById('edit-material-select').value;
+    const message=document.getElementById('edit-material-message');
+    if(!key){message.textContent='Select a material type first.';return;}
+    const name=document.getElementById('edit-material-name').value.trim();
+    const category=document.getElementById('edit-material-category').value;
+    const materials=[...document.querySelectorAll('.edit-material-tier')].map(input=>({
+      id:Number(input.dataset.id),name:input.value.trim()}));
+    if(!name||materials.some(item=>!item.name)){message.textContent='Fill in the type and material names.';return;}
+    const button=document.getElementById('update-material');button.disabled=true;
+    try{
+      const response=await fetch('/api/catalog/material-types',{method:'PUT',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({key,name,category,materials})});
+      if(!response.ok){const error=await response.json();throw new Error(
+        typeof error.detail==='string'?error.detail:'Could not save material type.');}
+      const result=await response.json();
+      document.getElementById('edit-material-search').value='';
+      await loadEditCatalog();filterEditMaterials(result.key);
+      await loadCatalogOptions();await loadMissingFamilies();await load();
+      message.textContent='Material type saved.';
+    }catch(error){message.textContent=error.message;}finally{button.disabled=false;}
+  }
+  document.getElementById('edit-character-select').addEventListener('change',()=>
+    loadEditCharacter().catch(error=>document.getElementById('edit-character-message').textContent=error.message));
+  document.getElementById('edit-weapon-select').addEventListener('change',()=>
+    loadEditWeapon().catch(error=>document.getElementById('edit-weapon-message').textContent=error.message));
+  document.getElementById('edit-material-select').addEventListener('change',showEditMaterial);
+  document.getElementById('edit-copy-select').addEventListener('change',showEditCopy);
+  document.getElementById('edit-material-search').addEventListener('input',()=>filterEditMaterials());
+  for(const kind of ['character','weapon'])
+    document.getElementById('update-'+kind).addEventListener('click',()=>saveEdit(kind));
+  document.getElementById('update-material').addEventListener('click',saveMaterialType);
+  document.getElementById('update-copy').addEventListener('click',async()=>{
+    const id=document.getElementById('edit-copy-select').value;
+    const message=document.getElementById('edit-copy-message');
+    if(!id){message.textContent='Select a weapon copy first.';return;}
+    const label=document.getElementById('edit-copy-label').value.trim();
+    const button=document.getElementById('update-copy');button.disabled=true;
+    try{
+      const response=await fetch('/api/weapon-copies/'+id+'/label',{
+        method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({label:label||null})});
+      if(!response.ok)throw new Error('Could not save copy label (HTTP '+response.status+').');
+      await loadEditCatalog(null,null,null,id);await loadWeaponCopies();
+      message.textContent='Copy label saved.';
+    }catch(error){message.textContent=error.message;}finally{button.disabled=false;}
+  });
   async function saveInventory(material, input, button) {
     const message = document.getElementById('save-message');
     const raw = input.value.trim();
@@ -932,9 +1750,8 @@ def home():
       if (!response.ok) throw new Error('Could not load the shopping list (HTTP ' + response.status + ').');
       const data = await response.json();
       const i = data.included;
-      summary.textContent = `${i.characters || 0} characters, ${i['weapon copies'] || 0} weapon copies, ` +
-        `${i.Traveller || 0} Traveller included. ${data.excluded.length} goals excluded. ` +
-        `EXP: ${number.format(data.character_exp)} character, ${number.format(data.weapon_exp)} weapon points.`;
+      summary.textContent = `${i.characters || 0} characters, ${i.weapons || 0} weapons, ` +
+        `${i.Traveller || 0} Traveller included. ${data.excluded.length} goals excluded.`;
       const body = document.getElementById('materials');
       body.replaceChildren();
       for (const item of data.materials) {
@@ -965,10 +1782,16 @@ def home():
     } catch (error) { summary.textContent = error.message; }
   }
   load();
-  loadCharacters().catch(error => { document.getElementById('goal-message').textContent = error.message; });
-  loadWeaponCopies().catch(error => { document.getElementById('weapon-message').textContent = error.message; });
+  const selected = new URLSearchParams(location.search);
+  loadCharacters(selected.get('character')).catch(error => { document.getElementById('goal-message').textContent = error.message; });
+  loadWeaponCopies(selected.get('weapon')).catch(error => { document.getElementById('weapon-message').textContent = error.message; });
   loadWeaponCatalog().catch(error => { document.getElementById('add-copy-message').textContent = error.message; });
   loadTravellerElements().catch(error => { document.getElementById('traveller-message').textContent = error.message; });
   loadMissingFamilies().catch(error => { document.getElementById('family-message').textContent = error.message; });
-  loadCatalogOptions().catch(error => { document.getElementById('create-character-message').textContent = error.message; });
+  setupEditTraveller(selected.get('traveller'),selected.get('slot')).catch(error=>{
+    document.getElementById('edit-traveller-message').textContent=error.message;});
+  loadCatalogOptions().then(()=>loadEditCatalog(selected.get('character'),selected.get('weapon'),
+    selected.get('material'),selected.get('copy'))).catch(error => {
+      document.getElementById('create-character-message').textContent = error.message;
+    });
 </script></body></html>'''
