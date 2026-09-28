@@ -1,164 +1,64 @@
 # Genshin Tracker
 
-Run the local web app from this folder:
+A local web app for tracking Genshin Impact character, weapon, and Traveller goals against your inventory. It runs on your computer with Python and stores changes in the included SQLite database. You do not need the old Excel workbook or any import scripts to use it.
+
+## Start the app
+
+Install **Python 3.10 or newer**. On Windows, open PowerShell in the project folder (the folder containing `app_v2.py` and `genshin_v2.db`), then run:
 
 ```powershell
+py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install fastapi uvicorn
 .\.venv\Scripts\python.exe -m uvicorn app_v2:app --reload
 ```
 
-Open <http://127.0.0.1:8000/> for Inventory Overview. `genshin_v2.db` holds the catalog, inventory,
-goals, cost rules, and material links. Back up this file before making large
-sets of changes. The browser saves directly to it.
+Open <http://127.0.0.1:8000/> in your browser. Keep the PowerShell window open while using the app. Press **Ctrl+C** there to stop it. On later visits, run only the last command from the project folder; the environment and packages are already installed.
 
-After installing this version, stop the app and assign explicit IDs to Traveller
-talent rows, with Cryo last. This preserves all current and target values and
-can be rerun safely:
+If `py` is unavailable but `python` works, substitute `python` for `py -3` in the first command. On macOS or Linux, use `python3 -m venv .venv`, install packages with `.venv/bin/python -m pip install fastapi uvicorn`, and start with `.venv/bin/python -m uvicorn app_v2:app --reload`.
 
-```powershell
-.\.venv\Scripts\python.exe add_traveller_talent_ids.py
-```
+The included `genshin_v2.db` already contains the catalog, inventory, goals, cost rules, and material links. **Do not run a database creation or workbook import script.** The app can create small supporting lookup tables itself when you use certain editors.
 
-## Inventory Overview and Progress Lists
+## Keep your data safe
 
-Use **Inventory Overview** in the navigation, or open
-<http://127.0.0.1:8000/overview>. It shows all catalog materials, including
-materials with no inventory, grouped and ordered by the workbook's families.
-Mora has the same columns as other materials. Enter a new total in
-**Update Value** and save. Character EXP item values are 1,000 / 5,000 /
-20,000 points; weapon ores are 400 / 2,000 / 10,000 points. The summary
-compares your combined held EXP points with the EXP required by your current
-goals. The three item quantities come first, followed by five total EXP rows:
-required, held, remaining, max required, and to max.
-Numeric columns are centered. A heavier line starts each new material family;
-talent books and weapon ascension materials have a slightly stronger line between
-regions. Boss drops and local specialties each count as their own family.
-Within a three or four tier material family, three lower tier items can be
-converted to one of the next tier. Weekly boss drops can be exchanged 1:1
-within their boss family. **Still Needed** and **To Max** take these possible
-conversions into account. **Convert (Goal)** and **Convert (Max)** show how many
-of that row's owned items would be spent as conversion inputs in each separate
-scenario. These are plans, not automatic changes to inventory; owned values
-stay as entered. Pink cells mark remaining shortages or required conversions
-for saved goals only. Max columns are unhighlighted.
-The lines between individual boss drops and local specialties are 1px; other
-family dividers are 2px, and region dividers are 3px.
+The app saves directly to `genshin_v2.db`. Before a large edit or an update from GitHub, stop the app and copy that file to a safe location. If you replace the database with a fresh copy from the repository, you replace your saved inventory and progress too. To restore a backup, stop the app, put your backed-up `genshin_v2.db` in the project folder, then restart it.
 
-**Max Required** shows what it would take from current progress to level 90,
-ascension 6, and three level 10 talents for every character. It includes the
-first copy of every weapon; 1★ and 2★ weapons use their actual level 70 / ascension 4
-maximum because the game cost tables end there. Extra copies are not counted in
-this ceiling, although they remain in your normal goal totals. Traveller's
-shared level is raised to 90 / ascension 6 and every element with defined
-talent costs is raised to level 10. Cryo Traveller talent costs are absent, so
-the displayed max total is incomplete until those rules are supplied.
-Any material mapping gaps are listed as exclusions.
-The **To Max** number subtracts owned inventory from Max Required. Crafting
-conversions and EXP item overshoot are not included in these quantities.
+Python's `__pycache__/` files and the local `.venv/` environment are generated; they are not your saved game data.
 
-Use separate **Characters**, **Weapons**, and **Traveller** pages to see each
-progress list in database ID order. The weapon page uses `weapons.id` followed
-by copy number. Traveller talent rows now have explicit IDs, with Cryo last.
-Search characters or weapons and click a name to edit its
-goals or current progress. The **Goals** page at `/goals` contains collapsible
-editors and the excluded-goals list. Select a character, weapon, or Traveller
-element before editing; each selector starts blank. Use **Add data** to add entries and complete missing
-material types.
+## Pages and everyday use
 
-Each progress page has temporary sorting by clicking a column heading and a
-filter field beneath every heading. **Clear filters** restores ID order. Character
-IDs come from `characters.id`. The weapon page follows the **Weapon Data Table**
-column order, displays `weapons.id` and the per-weapon `copy_number` as **Copy ID**,
-and still links each row to its actual database copy. The character page follows
-**Character Data Table** column order, including gem, world boss material, mob drop,
-and local speciality. Traveller shows one row per talent in **Traveller Data
-Table** column order. Cryo's material fields remain blank because the workbook
-has no Cryo rows; it has no visible ID column.
-Progress tables expand on wide screens and scroll horizontally on smaller ones
-so every catalog and progress column can be read.
-Use **Show or Hide Columns** on each progress page to choose visible columns;
-column choices reset when the page reloads.
-The far-right **Actions** column opens the editors for characters, weapons,
-weapon copy labels, and Traveller talent rows.
+| Page | What it does |
+| --- | --- |
+| **Inventory Overview** (`/`) | Lists materials by category and family. Enter the **new total owned** in **Update Value**, then save. It shows requirements for saved goals and for maxing the catalog. |
+| **Goals** (`/goals`) | Set target levels, ascensions, and talents for characters, weapon copies, and Traveller elements. **Record Current Progress** after leveling up. The page also lists goals excluded because their costs are incomplete. |
+| **Characters**, **Weapons**, **Traveller** | View progress in separate tables. Click headings to sort, enter text below headings to filter, and use **Show or Hide Columns** to choose visible columns. These view choices reset on reload. The far-right **Actions** column opens the relevant editor. |
+| **Add data** (`/catalog`) | Add characters, weapons, and material types; edit existing data; complete missing material types. |
 
-## Correct Existing Data
+A weapon may have any number of copies. Goals and current progress belong to each copy, while its name, rarity, type, and material families belong to the weapon. The Goals summary counts **unique weapons**, rather than copies. The max calculation includes the first copy of each weapon; saved goals include the copies you have set up.
 
-Under **Add data → Add New → New Material**, choose the material type, enter a type
-name, and fill in the material names in tier order. The form supports talent
-books, weapon ascension materials, common and elite enemy drops, weekly boss
-drops, world boss drops, and local specialities. New types can be selected
-when adding characters or weapons. Existing missing type entries with that
-name are linked automatically. Materials start with zero inventory.
+Saving current progress raises a target if the new current value passes it. It does **not** subtract spent materials from inventory. Update the owned total separately to match what you actually have.
 
-Open **Add data → Edit Existing Data**, then select a character, weapon, weapon
-copy label, or material type. The progress lists offer **Edit data** links, and material names on
-the overview open the material editor. You can correct names, character or
-weapon catalog fields, a material type name, its category, and each tier's
-material name. Material renames keep their
-database ID, inventory quantity, requirement links, and workbook display
-position. Changing a character or weapon's material type refreshes its links;
-an unknown type appears under **Missing Material Types** until completed.
-The material type picker follows the overview's category and family order;
-ascension gems appear in four tier groups, including Brilliant Diamond.
-Changing the bucket of a material already used in costs is blocked to prevent
-its requirements from moving into an unrelated category.
-Changing a weapon to rarity 1 or 2 is rejected if any copy already exceeds
-that rarity's level or ascension cap.
-Traveller editing saves the common drop, talent material, and weekly boss
-labels for each element and talent slot. These labels appear in the Traveller
-progress list; changing them does not alter separately stored talent costs.
+### Reading the overview
 
-The Goals summary counts distinct weapons, so adding another copy does not
-increase the weapon count. It omits EXP point totals; those remain on Inventory
-Overview.
+**Required**, **Owned**, and **Still Needed** compare all included goals with your inventory. **Max Required** and **To Max** compare the inventory with a ceiling where every character reaches level 90, ascension 6, and three level 10 talents; first copies of weapons reach their supported maximum (level 70 / ascension 4 for 1★ and 2★ weapons, level 90 / ascension 6 otherwise). Traveller's shared level and ascension are included, along with defined talent costs for its elements.
 
-For an existing database, run the lookup migrations before using the catalog
-forms. Rerunning them is safe:
+For three or four tier families, the conversion columns show lower tier materials that would be consumed at a 3:1 rate. Weekly boss materials can be exchanged within a boss family at 1:1. These columns are estimates for each scenario, **not** automatic inventory changes. Highlighted cells indicate a shortage or needed conversion for saved goals.
 
-```powershell
-.\.venv\Scripts\python.exe add_element_gem_lookup.py
-.\.venv\Scripts\python.exe add_catalog_type_lookups.py
-```
+Character and weapon EXP items are entered as item counts. Each EXP section totals the points held across its item denominations and compares them with required EXP. Using items can overshoot the exact target and cost more Mora than the displayed baseline.
 
-## Add New Game Content
+**Cryo Traveller talent costs are not yet defined.** Leave Cryo talent goals at their current levels; otherwise Traveller is excluded from the affected totals. The overview marks its max totals as incomplete for the same reason. Other missing material links appear as exclusions until completed.
 
-Open **Add New** on the page. A new character needs its name, element,
-world boss material, common drop type, local specialty, talent book
-type, and weekly boss **type** (for example, `Dvalin 3`). A new weapon needs its name, weapon type,
-rarity, ascension material type, common drop type, and elite drop type.
-The app creates level 1 progress and, for a weapon, Copy 1. Set their goals
-using the normal goal controls afterward.
+## Add and correct catalog data
 
-## Record Progress
+On **Add data → Add New**, use **New Character** or **New Weapon** to create an entry at level 1 and ascension 0 (with talents at level 1 for characters). New weapons start with Copy 1. The element determines a character's gem type. Choose existing material types when available.
 
-In a character, weapon, or Traveller goal, open **Record Current Progress**
-after leveling up. Enter the current level and ascension, plus current talent
-levels for characters and Traveller, then save. Current values cannot move
-backward. If a current value passes its target, the target moves up to match.
-The shopping list then recalculates. Updating progress does not automatically
-subtract materials from inventory; use the inventory update field to record
-the quantities you actually own.
+Use **New Material** to choose a category such as Talent Material, Weapon Ascension Material, Common Enemy Drop, Elite Enemy Drop, Weekly Boss Drop, World Boss Drop, or Local Speciality. Enter a type name and the material names for its tiers, from lowest to highest. New materials start with zero owned. A completed type becomes available when adding characters or weapons and links entries that were waiting for that type.
 
-The gem type is determined from the selected element using the
-`element_gems` table. This lookup was migrated from the workbook's
-**Enemy Drops Table**; the web app does not read the workbook.
+If an entry reports a missing type, open **Missing Material Types**, enter the exact tier material names, and save. Until its links are complete, the app excludes that entry's costs instead of silently understating the total.
 
-The Common Drop and Elite Drop dropdowns follow **Enemy Drops Table** order.
-Talent Book and Weekly Boss Type follow **Character Talent Mats** order;
-Ascension Material Type follows **Weapon Ascension Mats** order. Weekly boss
-types map to one material name. The one-time lookups now live in SQLite;
-the running app does not read the workbook. Every catalog field starts blank.
-These type dropdowns offer **New Type…** for game content without a saved mapping.
+Under **Edit Existing Data**, you can correct character fields, weapon fields, a weapon copy label, Traveller progress-list labels, and material types. The material editor groups tiered items by type, including ascension gems, and lets you edit each tier's name. Material renames retain database IDs, inventory, and cost links. Category changes for materials already used in costs are blocked to protect those links. Traveller label edits change the progress list only; they do not rewrite the separately stored talent cost rules.
 
-Existing material types are linked automatically. A type not yet in the
-database appears under **Missing Material Types**. Enter its exact material
-names in tier order: common drops and talent books have tiers 1–3 and 2–4
-respectively; elite drops use tiers 2–4; weapon ascension materials use 2–5;
-weekly boss types have one material at tier 0.
-Until those names are saved, the shopping list excludes the affected entry
-and says why. Newly created individual materials start with zero owned.
+## Project files
 
-The `.xlsm` workbook and `import_*.py` / `link_materials.py` files were used
-for the initial migration. The running app does not read the workbook.
-Do not rerun `link_materials.py` after editing mappings in SQLite: it deletes
-the current links and rebuilds them from the old workbook.
+`app_v2.py` starts the web app. The other `.py` files in the project folder supply its calculators, catalog editing, ordering, and page rendering. `genshin_v2.db` is the live SQLite database. Keep these files together in the same folder.
+
+The app runs locally at `127.0.0.1:8000`; it does not need a hosted server to use the included database.
