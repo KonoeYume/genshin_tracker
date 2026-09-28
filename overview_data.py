@@ -44,7 +44,7 @@ def max_remaining(db):
             target_ascension=(CASE WHEN
             (SELECT rarity FROM weapons WHERE id=weapon_id)<=2 THEN 4 ELSE 6 END)''')
         temp.execute('UPDATE traveller_progress SET target_level=90,target_ascension=6')
-        temp.execute("UPDATE traveller_talent_progress SET target_level=10 WHERE element!='Cryo'")
+        temp.execute("UPDATE traveller_talent_progress SET target_level=10")
         totals = Counter()
         excluded = []
         character_exp = weapon_exp = 0
@@ -197,8 +197,8 @@ def overview(db):
                           'max_required':max_weapon_exp}},
             'goal_included':dict(included),'goal_excluded':goal_excluded,
             'max_included':max_included,'max_excluded':max_excluded,
-            'max_complete':False,
-        'max_note':'Max totals remain incomplete: Cryo Traveller talent costs are missing.'}
+            'max_complete':not max_excluded,
+        'max_note':''}
 
 
 def progress_lists(db):

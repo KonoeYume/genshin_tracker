@@ -649,8 +649,6 @@ def save_traveller_goal(element: str, update: TravellerGoalUpdate):
             target<current or target>10
             for (_,current),target in zip(talents,update.talent_targets)):
             raise HTTPException(status_code=422,detail='Three valid talent targets are required')
-        if element=='Cryo' and any(target>current for (_,current),target in zip(talents,update.talent_targets)):
-            raise HTTPException(status_code=422,detail='Cryo material costs are not available yet')
         db.execute('UPDATE traveller_progress SET target_level=?,target_ascension=? WHERE id=1',
                    (update.target_level,update.target_ascension))
         db.executemany('''UPDATE traveller_talent_progress SET target_level=?
@@ -676,8 +674,6 @@ def save_traveller_progress(element: str, update: TravellerProgressUpdate):
             any(type(level) is not int or level<old or level>10
                 for (_,old,_),level in zip(talents,update.talent_levels))):
             raise HTTPException(status_code=422,detail='Enter three valid current talent levels')
-        if element=='Cryo' and any(level>old for (_,old,_),level in zip(talents,update.talent_levels)):
-            raise HTTPException(status_code=422,detail='Cryo material costs are not available yet')
         db.execute('''UPDATE traveller_progress SET current_level=?,current_ascension=?,
             target_level=?,target_ascension=? WHERE id=1''',
             (update.current_level,update.current_ascension,max(target_level,update.current_level),
@@ -890,7 +886,7 @@ def main_page(view):
 <button id="record-traveller" type="button">Save Current Progress</button>
 <span id="record-traveller-message" role="status"></span>
 </details>
-<p class="note">Traveller level and ascension are shared across elements. Cryo talent costs are not available yet.</p>
+<p class="note">Traveller level and ascension are shared across elements.</p>
 </details>
 <section class="summary catalog-only"><h2>Add New</h2>
 <p class="note">New entries start at level 1, ascension 0, and talent level 1. Existing material types are reused. If a type is new, complete it in Missing Material Types after saving.</p>
@@ -1031,7 +1027,7 @@ def main_page(view):
     select.onchange = loadCharacterGoal;
     if (select.value) await loadCharacterGoal();
   }
-  function fillCurrentTalents(containerId, className, talents, cryo=false) {
+  function fillCurrentTalents(containerId, className, talents) {
     const container = document.getElementById(containerId);
     container.replaceChildren();
     for (const talent of talents) {
@@ -1039,7 +1035,7 @@ def main_page(view):
       label.textContent = `Talent ${talent.talent_slot} Current Level `;
       const input = document.createElement('input');
       input.type = 'number'; input.step = '1'; input.min = talent.current_level;
-      input.max = cryo ? talent.current_level : 10;
+      input.max = 10;
       input.value = talent.current_level; input.className = className;
       label.append(input); container.append(label);
     }
@@ -1285,8 +1281,7 @@ def main_page(view):
     currentLevel.min = goal.current_level; currentLevel.value = goal.current_level;
     const currentAsc = document.getElementById('record-traveller-ascension');
     currentAsc.min = goal.current_ascension; currentAsc.value = goal.current_ascension;
-    fillCurrentTalents('record-traveller-talents','record-traveller-talent',goal.talents,
-      element === 'Cryo');
+    fillCurrentTalents('record-traveller-talents','record-traveller-talent',goal.talents);
     const level = document.getElementById('traveller-level');
     level.min = goal.current_level; level.value = goal.target_level;
     const asc = document.getElementById('traveller-ascension');
@@ -1302,7 +1297,7 @@ def main_page(view):
       label.textContent = `Talent ${talent.talent_slot} Target Level: `;
       const input = document.createElement('input');
       input.type = 'number'; input.min = talent.current_level;
-      input.max = element === 'Cryo' ? talent.current_level : 10;
+      input.max = 10;
       input.step = '1'; input.value = talent.target_level;
       input.className = 'traveller-talent-target'; label.append(input);
       targetRow.append(label); group.append(current, targetRow); container.append(group);

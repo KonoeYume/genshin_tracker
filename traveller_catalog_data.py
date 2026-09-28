@@ -1,6 +1,6 @@
 """Traveller talent metadata snapshot from the workbook's Traveller Data Table.
 
-Cryo is not present in that table yet; its material fields remain blank.
+Cryo uses Snezhnaya books, Aberrant Chimeric Monster drops and Game before the Gate 3.
 """
 
 TRAVELLER_DETAILS = {
@@ -12,4 +12,5 @@ TRAVELLER_DETAILS = {
     'Dendro': [('Floating Fungi','Sumeru','Raiden 1')]*3,
     'Hydro': [('Fontemer Aberrant','Fontaine','Apep 1')]*3,
     'Pyro': [('Sauroform Tribal Warrior','Natlan','Cornerstone of Stars and Flames')]*3,
+    'Cryo': [('Aberrant Chimeric Monster','Snezhnaya','Game before the Gate 3')]*3,
 }

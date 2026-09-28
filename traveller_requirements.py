@@ -1,7 +1,6 @@
 """Calculate Traveller level and element talent goals from genshin_v2.db.
 
-Requires import_traveller_costs.py to have been run. Cryo stays a placeholder
-until its material rules are added; a Cryo goal above current blocks totals.
+Requires complete per-level costs for all Traveller elements in genshin_v2.db.
 """
 import sqlite3
 from collections import Counter
@@ -45,8 +44,6 @@ def calculate(db):
             raise ValueError(f'Invalid Traveller {element} talent {slot}: {start} to {end}')
         if start==end:
             continue
-        if element=='Cryo':
-            raise ValueError('Cryo Traveller has no material rules yet; leave its talent goals unchanged')
         rows=db.execute('''SELECT talent_level,material_id,quantity FROM traveller_talent_costs
             WHERE element=? AND talent_slot=? AND talent_level>? AND talent_level<=?''',
             (element,slot,start,end)).fetchall()
