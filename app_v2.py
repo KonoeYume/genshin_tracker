@@ -12,7 +12,11 @@ from pydantic import BaseModel, Field
 from shopping_list import build
 from catalog_admin import FAMILY_TIERS, create_character, create_weapon
 from overview_data import overview, progress_lists
-from dashboard_pages import overview_page, progress_page
+from dashboard_pages import overview_page, progress_page, shopping_page
+from shopping_view import from_overview as shopping_from_overview
+from display_materials import IGNORED_MATERIALS
+from sticky_table_headers import STICKY_TABLE_SCRIPT
+from bulk_goals import apply as apply_bulk_goals
 from catalog_edit import (MATERIAL_CATEGORIES, edit_character, edit_weapon,
                           edit_material, traveller_details, edit_traveller,
                           create_material_type)
@@ -34,6 +38,25 @@ class InventoryBatchItem(BaseModel):
 
 class InventoryBatchUpdate(BaseModel):
     updates: list[InventoryBatchItem]
+
+
+class BulkGoalUpdate(BaseModel):
+    scope: str
+    target_level: int | None = None
+    target_ascension: int | None = None
+    talent_target: int | None = None
+
+
+@app.put('/api/goals/bulk')
+def save_bulk_goals(update: BulkGoalUpdate):
+    try:
+        with sqlite3.connect(DB_PATH) as db:
+            db.execute('PRAGMA foreign_keys=ON')
+            db.execute('BEGIN IMMEDIATE')
+            return apply_bulk_goals(db,update.scope,update.target_level,
+                                    update.target_ascension,update.talent_target)
+    except ValueError as error:
+        raise HTTPException(status_code=422,detail=str(error)) from error
 
 
 class CharacterGoalUpdate(BaseModel):
@@ -332,7 +355,7 @@ def shopping_data(db_path=DB_PATH):
         totals, owned, included, excluded, character_exp, weapon_exp = build(db)
     items = [dict(material=name, required=totals[name], owned=owned[name],
                   still_needed=max(0, totals[name]-owned[name]))
-             for name in sorted(totals, key=str.casefold)]
+             for name in sorted(totals, key=str.casefold) if name not in IGNORED_MATERIALS]
     return dict(included=dict(included), excluded=excluded,
                 character_exp=character_exp, weapon_exp=weapon_exp, materials=items)
 
@@ -352,6 +375,20 @@ def overview_api():
             return overview(db)
     except sqlite3.Error as error:
         raise HTTPException(status_code=500, detail=str(error)) from error
+
+
+@app.get('/api/shopping')
+def shopping_overview_api():
+    try:
+        with sqlite3.connect(DB_PATH) as db:
+            return shopping_from_overview(overview(db))
+    except sqlite3.Error as error:
+        raise HTTPException(status_code=500,detail=str(error)) from error
+
+
+@app.get('/shopping', response_class=HTMLResponse)
+def shopping_page_route():
+    return shopping_page()
 
 
 @app.get('/api/progress')
@@ -778,7 +815,7 @@ def catalog_screen():
 def main_page(view):
     page_title = {'catalog':'Add Data', 'character-goal':'Character Goal',
                   'weapon-goal':'Weapon Goal', 'traveller-goal':'Traveller Goal'}[view]
-    return '''<!doctype html>
+    html = '''<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>''' + page_title + ''' · Genshin Tracker</title>
 <style>
@@ -820,7 +857,7 @@ def main_page(view):
 </style></head><body class="''' + view + '''-view">
 <header class="site-header">
 <div class="site-title">Genshin Tracker</div>
-<nav><a href="/">Inventory Overview</a><a href="/characters">Characters</a><a href="/weapons">Weapons</a><a href="/traveller">Traveller</a><a href="/catalog">Add data</a></nav>
+<nav><a href="/">Inventory Overview</a><a href="/shopping">Shopping List</a><a href="/characters">Characters</a><a href="/weapons">Weapons</a><a href="/traveller">Traveller</a><a href="/catalog">Add data</a></nav>
 <h1>''' + page_title + '''</h1>
 </header>
 <p class="note goals-only">Set targets and record current progress. View all materials on Inventory Overview.</p>
@@ -1915,3 +1952,4 @@ def main_page(view):
       });
   }
 </script></body></html>'''
+    return html.replace('</body>', STICKY_TABLE_SCRIPT+'</body>')

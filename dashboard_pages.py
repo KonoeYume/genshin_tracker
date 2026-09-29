@@ -1,8 +1,13 @@
 """Standalone inventory and catalog progress screens."""
 
+from sticky_table_headers import STICKY_TABLE_SCRIPT
+
 STYLE = '''<style>
 body{font:15px system-ui,sans-serif;color:#263244;background:#f8fafc;max-width:1250px;margin:25px auto;padding:0 16px}
 nav a{margin-right:18px}section{background:white;border:1px solid #d6dfe8;border-radius:8px;padding:16px;margin:20px 0}
+.shopping-family{margin:18px 0 22px}.shopping-family h3{margin:0 0 8px;font-size:1.05rem}
+.shopping-table td:nth-child(n+2),.shopping-table th:nth-child(n+2){text-align:center}
+.shopping-table .needed{background:#FFC7CE;color:#9C0006;font-weight:600}
 .scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;min-width:750px}th,td{border-bottom:1px solid #e2e8ef;padding:8px;text-align:left;white-space:nowrap}
 th{background:#eaf0f6;position:sticky;top:0}.inventory-table th:not(:first-child),.inventory-table td.num,.inventory-table td.control{text-align:center}
 .inventory-table tr.family-start td{border-top:2px solid #92a8bc}
@@ -18,12 +23,24 @@ button{padding:6px 9px;cursor:pointer}.note{color:#526071}.missing{color:#9a3412
 body.progress-page{max-width:1800px}.progress-table{width:max-content;min-width:100%}
 .progress-table th,.progress-table td{padding:10px 14px}
 .progress-table td:last-child{white-space:nowrap}
+.progress-table td.progress-meter{background:linear-gradient(90deg,#C6E8CF var(--progress),#F1F5F9 var(--progress));
+  color:#193525;font-weight:600}
+.progress-table td.progress-meter.complete{background:#B7E1CD;color:#14532D}
+.progress-legend{display:flex;gap:12px;align-items:center;margin:8px 0;color:#526071}
+.progress-legend-swatch{display:inline-block;width:90px;height:14px;vertical-align:middle;
+  background:linear-gradient(90deg,#C6E8CF 60%,#F1F5F9 60%);border:1px solid #d6dfe8}
 .column-options{display:flex;flex-wrap:wrap;gap:8px 18px;margin:10px 0}.column-options label{white-space:nowrap}
 .column-actions{display:flex;gap:8px;margin:10px 0}
 .site-header{position:sticky;top:0;z-index:30;background:#f8fafc;padding:10px 0 12px;
   box-shadow:0 4px 8px -8px #263244}
 .site-header h1{margin:12px 0 0}.site-title{font-size:20px;font-weight:700;margin-bottom:10px}
 .inventory-header-actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.bulk-goals{margin-top:8px}.bulk-goals h2{margin:0 0 6px}
+.bulk-goal-options{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:8px}
+.bulk-goal-options details{border:1px solid #d6dfe8;border-radius:6px;padding:10px;align-self:start}
+.bulk-goal-options summary{cursor:pointer;font-weight:600}
+.bulk-goal-options label{display:block;margin:8px 0}
+.bulk-goal-options input{display:block;box-sizing:border-box;margin-top:3px}
 </style>'''
 
 
@@ -32,15 +49,66 @@ def overview_page():
 <title>Inventory Overview · Genshin Tracker</title>''' + STYLE + '''</head><body>
 <header class="site-header inventory-header">
 <div class="site-title">Genshin Tracker</div>
-<nav><a href="/">Inventory Overview</a><a href="/characters">Characters</a><a href="/weapons">Weapons</a><a href="/traveller">Traveller</a><a href="/catalog">Add data</a></nav>
+<nav><a href="/">Inventory Overview</a><a href="/shopping">Shopping List</a><a href="/characters">Characters</a><a href="/weapons">Weapons</a><a href="/traveller">Traveller</a><a href="/catalog">Add data</a></nav>
 <h1>Inventory Overview</h1>
 <div class="inventory-header-actions"><button id="save-all" type="button">Save All</button><span id="save-status" role="status"></span></div>
 </header>
+<section class="bulk-goals"><h2>Goals</h2>
+<p class="note">Bulk targets apply to every entry in that group. Recorded progress is kept when it is already above the chosen target. One- and two-star weapons stop at level 70 and ascension 4.</p>
+<div class="bulk-goal-options">
+<details><summary>Reset All Goals</summary>
+<p>Set every character, weapon, and Traveller target to its current progress.</p>
+<button type="button" data-bulk-scope="reset">Reset All Goals</button></details>
+<details><summary>Set Character Targets</summary>
+<label>Target Level <input type="number" min="1" max="90" step="1" data-bulk-field="level"></label>
+<label>Target Ascension <input type="number" min="0" max="6" step="1" data-bulk-field="ascension"></label>
+<label>All Talent Target Levels <input type="number" min="1" max="10" step="1" data-bulk-field="talent"></label>
+<button type="button" data-bulk-scope="characters">Set Character Targets</button></details>
+<details><summary>Set Weapon Targets</summary>
+<p class="note">Applies to every weapon copy.</p>
+<label>Target Level <input type="number" min="1" max="90" step="1" data-bulk-field="level"></label>
+<label>Target Ascension <input type="number" min="0" max="6" step="1" data-bulk-field="ascension"></label>
+<button type="button" data-bulk-scope="weapons">Set Weapon Targets</button></details>
+<details><summary>Set Traveller Targets</summary>
+<p class="note">Shared level and ascension; the talent target applies to all three talents for every element.</p>
+<label>Target Level <input type="number" min="1" max="90" step="1" data-bulk-field="level"></label>
+<label>Target Ascension <input type="number" min="0" max="6" step="1" data-bulk-field="ascension"></label>
+<label>All Talent Target Levels <input type="number" min="1" max="10" step="1" data-bulk-field="talent"></label>
+<button type="button" data-bulk-scope="traveller">Set Traveller Targets</button></details>
+</div><p id="bulk-goal-status" role="status"></p></section>
 <div id="warnings"></div><div id="sections">Loading…</div>
 <script>
 const fmt = new Intl.NumberFormat();
 const n = x => fmt.format(x);
 function cell(row, value, className='') {const td=row.insertCell();td.textContent=value;td.className=className;return td;}
+for(const button of document.querySelectorAll('[data-bulk-scope]'))button.addEventListener('click',async()=>{
+  const scope=button.dataset.bulkScope;
+  const status=document.getElementById('bulk-goal-status');
+  const panel=button.closest('details');
+  const payload={scope};
+  if(scope!=='reset'){
+    for(const [field,key] of [['level','target_level'],['ascension','target_ascension'],
+                               ['talent','talent_target']]){
+      const input=panel.querySelector('[data-bulk-field="'+field+'"]');
+      if(!input)continue;
+      const value=Number(input.value);
+      if(!input.value.trim()||!Number.isInteger(value)||!input.checkValidity()){
+        status.textContent='Enter valid whole-number targets for '+scope+'.';input.focus();return;
+      }
+      payload[key]=value;
+    }
+  }
+  button.disabled=true;status.textContent='Saving goals…';
+  try{
+    const response=await fetch('/api/goals/bulk',{method:'PUT',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    if(!response.ok){const error=await response.json();throw new Error(error.detail||'Could not update goals.');}
+    const result=await response.json();
+    await load();
+    status.textContent=scope==='reset'?'All goals reset to current progress.':
+      result.updated+' '+scope+' updated.';
+  }catch(error){status.textContent=error.message;}finally{button.disabled=false;}
+});
 async function saveAll() {
   const message=document.getElementById('save-status');
   const inputs=[...document.querySelectorAll('#sections input[data-material-id]')];
@@ -90,8 +158,8 @@ async function load() {
     if(['talent_book','weapon_ascension','common_drop','elite_drop','ascension_gem','weekly_boss_drop'].includes(section.category)){
       const info=document.createElement('p');info.className='note';
       info.textContent=section.category==='weekly_boss_drop' ?
-        'Convert columns show outputs received at 1:1 within each boss family. Inventory is not changed automatically.' :
-        'Convert columns show outputs crafted from lower tiers at 3:1 within each family. Inventory is not changed automatically.';
+        'Convert columns show 1:1 conversion actions on the source item row. Inventory is not changed automatically.' :
+        'Convert columns show 3:1 conversion actions on the source item row; each action makes one higher tier item. Inventory is not changed automatically.';
       panel.append(info);
     }
     const wrap=document.createElement('div');wrap.className='scroll';const table=document.createElement('table');table.className='inventory-table';
@@ -102,11 +170,14 @@ async function load() {
       const th=document.createElement('th');th.textContent=title;head.append(th);
     }
     const body=table.createTBody();
+    const familySizes=new Map();
+    for(const item of section.materials)
+      familySizes.set(item.family,(familySizes.get(item.family)||0)+1);
     let lastFamily=null,lastRegion=null;
     for(const material of section.materials) {
       const row=body.insertRow();
       if(!isExp && section.category!=='currency' && lastFamily!==null && material.family!==lastFamily)
-        row.classList.add(['character_boss_drop','local_specialty'].includes(section.category)?
+        row.classList.add(familySizes.get(material.family)===1?
           'single-item-start':'family-start');
       if(!isExp && lastRegion!==null && material.region && material.region!==lastRegion)
         row.classList.add('region-start');
@@ -148,7 +219,25 @@ async function load() {
 }
 document.getElementById('save-all').addEventListener('click',saveAll);
 load().catch(error=>{document.getElementById('sections').textContent=error.message;});
-</script></body></html>'''
+</script></body></html>'''.replace('</body>', STICKY_TABLE_SCRIPT+'</body>')
+
+
+def shopping_page():
+    # Share the inventory table, including conversion and inventory editing.
+    page=overview_page()
+    page=page.replace('Inventory Overview · Genshin Tracker</title>',
+                      'Shopping List · Genshin Tracker</title>')
+    page=page.replace('<h1>Inventory Overview</h1>', '<h1>Shopping List</h1>')
+    start=page.index('<section class="bulk-goals">')
+    end=page.index('<div id="warnings">',start)
+    page=page[:start]+page[end:]
+    page=page.replace("fetch('/api/overview')", "fetch('/api/shopping')")
+    page=page.replace('Could not load inventory overview.', 'Could not load shopping list.')
+    page=page.replace('for(const section of data.sections) {',
+        "if(!data.sections.length)root.textContent='No materials are currently needed for your goals.';\n  for(const section of data.sections) {")
+    page=page.replace('<div id="warnings"></div>',
+        '<p class="note">Only families with a shortage or needed conversion appear here. All inventory columns and Save All work as on Inventory Overview.</p><div id="warnings"></div>')
+    return page
 
 
 def progress_page(kind='characters'):
@@ -160,10 +249,11 @@ def progress_page(kind='characters'):
 <title>__TITLE__ · Genshin Tracker</title>''' + STYLE + '''</head><body class="progress-page">
 <header class="site-header">
 <div class="site-title">Genshin Tracker</div>
-<nav><a href="/">Inventory Overview</a><a href="/characters">Characters</a><a href="/weapons">Weapons</a><a href="/traveller">Traveller</a><a href="/catalog">Add data</a></nav>
+<nav><a href="/">Inventory Overview</a><a href="/shopping">Shopping List</a><a href="/characters">Characters</a><a href="/weapons">Weapons</a><a href="/traveller">Traveller</a><a href="/catalog">Add data</a></nav>
 <h1>__TITLE__</h1>
 </header>
-<p class="note">Click a heading to sort, or use the filter beneath it. Column choices persist on this device; sorting and filters reset when the page reloads.</p>
+<p class="note">Click a heading to sort, or use the filter beneath it. Column choices and filters persist on this device; sorting resets when the page reloads.</p>
+<p class="progress-legend"><span class="progress-legend-swatch" aria-hidden="true"></span>Green fill shows recorded progress toward the cap; talents count as complete at level 9.</p>
 <section><p id="shared-progress"></p><button type="button" id="clear-filters">Clear filters</button>
 <details><summary>Show or Hide Columns</summary>
 <div class="column-actions"><button type="button" id="show-all-columns">Show All</button><button type="button" id="hide-all-columns">Hide All</button></div>
@@ -189,9 +279,24 @@ const definitions={
     ['weekly_boss_type','Weekly Boss Material'],['current_level','Current Level',true],
     ['target_level','Target Level',true]]
 };
-const columns=definitions[kind], filters={};
+const columns=definitions[kind];
 const allColumns=columns.map(column=>column[0]).concat('actions');
 const columnStorageKey='genshin-tracker:progress-columns:'+kind;
+const filterStorageKey='genshin-tracker:progress-filters:'+kind;
+function savedFilters(){
+  try {
+    const stored=JSON.parse(localStorage.getItem(filterStorageKey));
+    if(stored && typeof stored==='object' && !Array.isArray(stored))
+      return Object.fromEntries(columns.map(([key])=>[key,stored[key]])
+        .filter(([,value])=>typeof value==='string' && value));
+  } catch(error) { /* Browser storage may be unavailable; keep defaults. */ }
+  return {};
+}
+const filters=savedFilters();
+function rememberFilters(){
+  try {localStorage.setItem(filterStorageKey,JSON.stringify(filters));}
+  catch(error) { /* Filters still work for this visit. */ }
+}
 function savedColumns(){
   try {
     const stored=JSON.parse(localStorage.getItem(columnStorageKey));
@@ -213,7 +318,7 @@ function syncColumnOptions(){
 function setAllColumns(show){
   visibleColumns.clear();
   if(show)for(const key of allColumns)visibleColumns.add(key);
-  else for(const key of Object.keys(filters))delete filters[key];
+  else {for(const key of Object.keys(filters))delete filters[key];rememberFilters();}
   rememberColumns();syncColumnOptions();buildHead();render();
 }
 function buildColumnOptions(){
@@ -226,6 +331,7 @@ function buildColumnOptions(){
       if(input.checked)visibleColumns.add(key);
       else {visibleColumns.delete(key);delete filters[key];
         if(sortKey===key){sortKey=kind==='weapons'?'weapon_id':kind==='traveller'?'order_id':'id';sortDirection=1;}}
+      rememberFilters();
       rememberColumns();buildHead();render();
     });
     wrapper.append(input,' '+label);options.append(wrapper);
@@ -243,6 +349,25 @@ function makeRows(data){
 function numericValue(row,key){
   return Number.parseInt(String(row[key]??''),10)||0;
 }
+function progressFraction(item,key){
+  let current,maximum;
+  if(kind==='characters'){
+    if(key==='level'){current=item.current_level;maximum=90;}
+    else if(key==='ascension'){current=item.current_ascension;maximum=6;}
+    else if(/^talent[123]$/.test(key)){
+      current=item.talents.find(t=>t.talent_slot===Number(key.slice(-1)))?.current_level;
+      maximum=9;
+    }
+  }else if(kind==='weapons'){
+    if(key==='level'){current=item.current_level;maximum=item.rarity<=2?70:90;}
+    else if(key==='ascension'){current=item.current_ascension;maximum=item.rarity<=2?4:6;}
+  }else if(key==='current_level'){
+    current=item.current_level;maximum=9;
+  }
+  if(current===undefined)return null;
+  const start=key==='ascension'?0:1;
+  return Math.max(0,Math.min(1,(current-start)/(maximum-start)));
+}
 function buildHead(){
   const head=document.getElementById('progress-head');head.replaceChildren();
   const headings=head.insertRow(),inputs=head.insertRow();
@@ -256,7 +381,10 @@ function buildHead(){
     const filterCell=document.createElement('th'),input=document.createElement('input');
     input.type='search';input.value=filters[key]||'';input.placeholder='Filter';
     input.setAttribute('aria-label','Filter '+label);
-    input.addEventListener('input',()=>{filters[key]=input.value;render();});
+    input.addEventListener('input',()=>{
+      if(input.value)filters[key]=input.value;else delete filters[key];
+      rememberFilters();render();
+    });
     filterCell.append(input);inputs.append(filterCell);
   }
   if(visibleColumns.has('actions')){
@@ -292,6 +420,12 @@ function render(){
           '/goals/traveller?traveller='+encodeURIComponent(item.element);
         link.textContent=value;cell.append(link);
       } else cell.textContent=value;
+      const fraction=progressFraction(item,key);
+      if(fraction!==null){
+        cell.classList.add('progress-meter');
+        cell.style.setProperty('--progress',Math.round(fraction*100)+'%');
+        if(fraction===1)cell.classList.add('complete');
+      }
     }
     if(!visibleColumns.has('actions'))continue;
     const actions=row.insertCell();
@@ -319,6 +453,7 @@ async function load(){
 }
 document.getElementById('clear-filters').addEventListener('click',()=>{
   for(const key of Object.keys(filters))delete filters[key];
+  rememberFilters();
   sortKey=kind==='weapons'?'weapon_id':kind==='traveller'?'order_id':'id';sortDirection=1;
   buildHead();render();
 });
@@ -327,4 +462,4 @@ document.getElementById('hide-all-columns').addEventListener('click',()=>setAllC
 buildColumnOptions();
 load().catch(error=>{document.getElementById('status').textContent=error.message;});
 </script></body></html>'''
-    return page.replace('__KIND__', kind).replace('__TITLE__', title)
+    return page.replace('__KIND__', kind).replace('__TITLE__', title).replace('</body>', STICKY_TABLE_SCRIPT+'</body>')

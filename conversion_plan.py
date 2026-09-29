@@ -2,7 +2,7 @@
 
 
 def plan(owned, required, rate=3, interchangeable=False):
-    """Return (unmet per item, converted outputs received per item).
+    """Return (unmet per item, conversion actions using each source item).
 
     Tiered families are ordered low to high. A higher tier is served first,
     while every tier's own requirement is reserved before its surplus is used.
@@ -20,7 +20,7 @@ def plan(owned, required, rate=3, interchangeable=False):
                 amount = min(-net[recipient], max(0,net[donor]))
                 net[recipient] += amount
                 net[donor] -= amount
-                outputs[recipient] += amount
+                outputs[donor] += amount
     else:
         if rate < 2:
             raise ValueError('Tier conversion rate must be at least two')
@@ -33,6 +33,7 @@ def plan(owned, required, rate=3, interchangeable=False):
         def spend(tier, amount):
             if amount == 0:
                 return
+            outputs[tier] += amount // rate
             if tier == 0:
                 if net[0] < amount:
                     raise AssertionError('Conversion plan exceeded available inventory')
@@ -44,12 +45,10 @@ def plan(owned, required, rate=3, interchangeable=False):
                 created = amount-net[tier]
                 spend(tier-1, rate*created)
                 net[tier] = 0
-                outputs[tier] += created
 
         for tier in range(len(net)-1,0,-1):
             deficit = max(0,-net[tier])
             crafted = min(deficit,supply(tier-1)//rate)
             spend(tier-1,rate*crafted)
             net[tier] += crafted
-            outputs[tier] += crafted
     return [max(0,-balance) for balance in net], outputs

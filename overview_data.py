@@ -7,9 +7,9 @@ from weapon_requirements import calculate as weapon_requirements
 from traveller_requirements import calculate as traveller_requirements
 from shopping_list import build
 from overview_order_data import MATERIAL_ORDER
-from catalog_lookup_data import TALENT_BOOK_ORDER, WEAPON_ASCENSION_ORDER, WEEKLY_BOSS_TYPES
 from conversion_plan import plan as conversion_plan
 from traveller_catalog_data import TRAVELLER_DETAILS
+from display_materials import IGNORED_MATERIALS
 
 CATEGORIES = [
     ('currency', 'Mora'), ('character_exp', 'Character EXP Items'),
@@ -107,6 +107,7 @@ def overview(db):
         ('talent_book','characters','character_materials','character_id','talent_book_family','talent_book'),
         ('weapon_ascension','weapons','weapon_materials','weapon_id','ascension_family','weapon_ascension'),
         ('weekly_boss_drop','characters','character_materials','character_id','weekly_boss_material','weekly_boss_drop'),
+        ('ascension_gem','characters','character_materials','character_id','gem_family','gem'),
     ):
         for name, family, tier in db.execute(f'''SELECT m.name,e.{field},l.tier FROM {table} e
             JOIN {links} l ON l.{entity_id}=e.id AND l.material_role=?
@@ -122,6 +123,8 @@ def overview(db):
     for row in db.execute('''SELECT m.id,m.name,m.category,COALESCE(i.quantity,0) owned
         FROM materials m LEFT JOIN inventory i ON i.material_id=m.id ORDER BY m.name'''):
         mid, name, category, owned = row
+        if name in IGNORED_MATERIALS:
+            continue
         goal, ceiling = goals[name], maximum[name]
         material = {'id':mid,'name':name,'owned':owned,'required':goal,
                     'still_needed':max(0,goal-owned),'max_required':ceiling,
@@ -145,24 +148,19 @@ def overview(db):
             new_families.get((category,item['name']),(item['name'].casefold(),0)),
             item['name'].casefold()))
         for item in section['materials']:
-            position = priority.get(item['sort_name'])
-            if position is not None and category in ('common_drop','elite_drop','talent_book',
-                                                      'weapon_ascension','ascension_gem','weekly_boss_drop'):
-                family_size = 4 if category in ('weapon_ascension','ascension_gem') else (1 if category=='weekly_boss_drop' else 3)
-                if category == 'weekly_boss_drop':
-                    type_name = WEEKLY_BOSS_TYPES[position][0]
-                    family = type_name.rsplit(' ',1)[0] if type_name.rsplit(' ',1)[-1].isdigit() else type_name
-                else:
-                    family = str(position // family_size)
-                if category in ('talent_book','weapon_ascension'):
-                    types = TALENT_BOOK_ORDER if category=='talent_book' else WEAPON_ASCENSION_ORDER
-                    type_name = types[position // family_size]
-                    family = type_name
-                    item['region'] = type_name.rsplit(' ',1)[0]
-            else:
-                family = new_families.get((category,item['name']),(item['name'].casefold(),0))[0]
-                if category in ('talent_book','weapon_ascension'):
-                    item['region'] = family.rsplit(' ',1)[0] if family.rsplit(' ',1)[-1].isdigit() else family
+            linked = new_families.get((category,item['name']))
+            family = linked[0] if linked else item['name'].casefold()
+            if category == 'ascension_gem' and not linked:
+                base, separator, tier_name = family.rpartition(' ')
+                if separator and tier_name in ('sliver','fragment','chunk','gemstone'):
+                    family = base
+            if category == 'weekly_boss_drop':
+                base, separator, number = family.rpartition(' ')
+                if separator and number.isdigit():
+                    family = base
+            if category in ('talent_book','weapon_ascension'):
+                base, separator, number = family.rpartition(' ')
+                item['region'] = base if separator and number.isdigit() else family
             item['family'] = family
         materials = section['materials']
         start = 0

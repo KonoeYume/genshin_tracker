@@ -11,6 +11,7 @@ from pathlib import Path
 from character_requirements import calculate as character_requirements
 from weapon_requirements import calculate as weapon_requirements
 from traveller_requirements import calculate as traveller_requirements
+from display_materials import IGNORED_MATERIALS
 
 DB_PATH = Path(__file__).resolve().parent / 'genshin_v2.db'
 
@@ -79,6 +80,8 @@ def main():
     print(f'{"Material":42} {"Required":>12} {"Owned":>12} {"Missing":>12}')
     print('-' * 81)
     for name in sorted(totals, key=str.casefold):
+        if name in IGNORED_MATERIALS:
+            continue
         required = totals[name]
         have = owned[name]
         print(f'{name[:42]:42} {required:12,} {have:12,} {max(0, required-have):12,}')
