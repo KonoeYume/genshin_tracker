@@ -1,0 +1,7 @@
+Extract all three files into your Genshin Tracker folder, beside app_v2.py and genshin_v2.db.
+
+Double-click Launch_Genshin_Tracker.bat. It uses your existing .venv, or creates one and installs dependencies if needed. Python must already be installed; first-time dependency installation requires internet access.
+
+Your default browser opens once the server is ready. Keep the launcher window open. Press Ctrl+C in that window to stop the app.
+
+To launch from the desktop, create a shortcut to Launch_Genshin_Tracker.bat and move the shortcut to the desktop. Keep the original files in the app folder.

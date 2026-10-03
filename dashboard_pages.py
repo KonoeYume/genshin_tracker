@@ -51,7 +51,7 @@ def overview_page():
 <div class="site-title">Genshin Tracker</div>
 <nav><a href="/">Inventory Overview</a><a href="/shopping">Shopping List</a><a href="/characters">Characters</a><a href="/weapons">Weapons</a><a href="/traveller">Traveller</a><a href="/catalog">Add data</a></nav>
 <h1>Inventory Overview</h1>
-<div class="inventory-header-actions"><button id="save-all" type="button">Save All</button><span id="save-status" role="status"></span></div>
+<div class="inventory-header-actions"><span class="note">Inventory saves when you leave an update box.</span><span id="save-status" role="status"></span></div>
 </header>
 <section class="bulk-goals"><h2>Goals</h2>
 <p class="note">Bulk targets apply to every entry in that group. Recorded progress is kept when it is already above the chosen target. One- and two-star weapons stop at level 70 and ascension 4.</p>
@@ -109,32 +109,33 @@ for(const button of document.querySelectorAll('[data-bulk-scope]'))button.addEve
       result.updated+' '+scope+' updated.';
   }catch(error){status.textContent=error.message;}finally{button.disabled=false;}
 });
-async function saveAll() {
+let inventorySaveQueue=Promise.resolve();
+let refreshingInventory=false;
+function queueInventorySave(input){
+  if(refreshingInventory)return;
+  const raw=input.value.trim();
+  if(!raw)return;
+  const quantity=Number(raw);
+  const materialId=input.dataset.materialId, name=input.dataset.materialName;
   const message=document.getElementById('save-status');
-  const inputs=[...document.querySelectorAll('#sections input[data-material-id]')];
-  const updates=[];
-  for(const input of inputs) {
-    const raw=input.value.trim();
-    if (!raw) continue;
-    const quantity=Number(raw);
-    if (!Number.isSafeInteger(quantity) || quantity<0) {
-      message.textContent='Enter a whole number of zero or more for '+input.dataset.materialName+'.';
-      input.focus();return;
-    }
-    updates.push({material_id:Number(input.dataset.materialId),quantity});
+  if(!Number.isSafeInteger(quantity)||quantity<0){
+    message.textContent='Enter a whole number of zero or more for '+name+'.';
+    input.setAttribute('aria-invalid','true');return;
   }
-  if (!updates.length) {message.textContent='Enter at least one update value.';return;}
-  const button=document.getElementById('save-all');button.disabled=true;
-  for(const input of inputs)input.disabled=true;
-  try {
-    const response=await fetch('/api/inventory/batch',{method:'PUT',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({updates})});
-    if(!response.ok) throw new Error('Could not save inventory (HTTP '+response.status+').');
-    await load();message.textContent=updates.length+' item'+(updates.length===1?'':'s')+' saved.';
-  } catch(error){message.textContent=error.message;} finally{
-    button.disabled=false;
-    for(const input of inputs)input.disabled=false;
-  }
+  input.removeAttribute('aria-invalid');
+  inventorySaveQueue=inventorySaveQueue.then(async()=>{
+    message.textContent='Saving '+name+'…';
+    try{
+      const response=await fetch('/api/inventory/batch',{method:'PUT',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({updates:[{material_id:Number(materialId),quantity}]})});
+      if(!response.ok)throw new Error('Could not save '+name+' (HTTP '+response.status+').');
+      const current=document.querySelector('#sections input[data-material-id="'+materialId+'"]');
+      if(current && current.value.trim()===raw)current.value='';
+      message.textContent=name+' saved.';
+      try{await load();}catch(error){message.textContent=name+' saved, but totals could not refresh. Refresh the page.';}
+    }catch(error){message.textContent=error.message+' Leave the box again to retry.';}
+  });
 }
 async function load() {
   const response=await fetch('/api/overview');
@@ -150,7 +151,13 @@ async function load() {
     const ul=document.createElement('ul');for(const entry of entries){const li=document.createElement('li');li.textContent=entry;ul.append(li);}
     details.append(ul);warnings.append(details);
   }
-  const root=document.getElementById('sections');root.replaceChildren();
+  const root=document.getElementById('sections');
+  const pending=new Map([...root.querySelectorAll('input[data-material-id]')]
+    .map(input=>[input.dataset.materialId,input.value]));
+  const focused=root.contains(document.activeElement)?document.activeElement.dataset.materialId:null;
+  const scrollX=window.scrollX,scrollY=window.scrollY;
+  refreshingInventory=true;
+  root.replaceChildren();
   for(const section of data.sections) {
     const panel=document.createElement('section');const heading=document.createElement('h2');heading.textContent=section.title;panel.append(heading);
     const isExp=section.category==='character_exp'||section.category==='weapon_exp';
@@ -197,6 +204,8 @@ async function load() {
       const input=document.createElement('input');input.type='number';input.min='0';input.step='1';
       input.dataset.materialId=material.id;input.dataset.materialName=material.name;
       input.setAttribute('aria-label','Update '+material.name);
+      input.value=pending.get(String(material.id))||'';
+      input.addEventListener('blur',()=>queueInventorySave(input));
       cell(row,'','control').append(input);
     }
     if(isExp){
@@ -216,8 +225,13 @@ async function load() {
     }
     wrap.append(table);panel.append(wrap);root.append(panel);
   }
+  if(focused){
+    const replacement=root.querySelector('input[data-material-id="'+focused+'"]');
+    if(replacement)replacement.focus({preventScroll:true});
+  }
+  window.scrollTo(scrollX,scrollY);
+  refreshingInventory=false;
 }
-document.getElementById('save-all').addEventListener('click',saveAll);
 load().catch(error=>{document.getElementById('sections').textContent=error.message;});
 </script></body></html>'''.replace('</body>', STICKY_TABLE_SCRIPT+'</body>')
 
@@ -236,7 +250,7 @@ def shopping_page():
     page=page.replace('for(const section of data.sections) {',
         "if(!data.sections.length)root.textContent='No materials are currently needed for your goals.';\n  for(const section of data.sections) {")
     page=page.replace('<div id="warnings"></div>',
-        '<p class="note">Only families with a shortage or needed conversion appear here. All inventory columns and Save All work as on Inventory Overview.</p><div id="warnings"></div>')
+        '<p class="note">Only families with a shortage or needed conversion appear here. All inventory columns and automatic saving work as on Inventory Overview.</p><div id="warnings"></div>')
     return page
 
 
